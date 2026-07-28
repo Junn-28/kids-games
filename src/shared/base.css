@@ -1,0 +1,18 @@
+/* すべてのページ共通の下地 */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #e8f7ff;
+  overscroll-behavior: none; /* こどもが引っぱっても ページが跳ねない */
+}
+
+#root {
+  min-height: 100%;
+}
+
+/* タップ操作前提。ダブルタップ拡大を止める */
+* {
+  touch-action: manipulation;
+}
