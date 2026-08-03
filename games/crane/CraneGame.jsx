@@ -166,6 +166,10 @@ const CLAW_UP = 1.7;        // あがる はやさ
 const GRIP_TICKS = 9;       // つめを とじている あいだ
 const CATCH_R = 10;         // つかめる よこはば(%)。ひろめ＝やさしい
 const CATCH_V = 8;          // つかめる たてはば(%)
+/* 3れんクレーンの あいだは、おりる とちゅうに とおった ふかさの ものも すくう。
+   つめが 3つ よこに ならぶだけだと、みんな おなじ ふかさなので
+   ひとつの レーンしか さらえない。それだと 3つに なった かいが ない */
+const CATCH_SWEEP = 34;
 const RAIL_Y = 6;           // レールの たかさ(%)
 const WATER = 46;           // みずめん(%)
 
@@ -177,6 +181,15 @@ const LANES = [
   { y: 83, speed: 0.52, raft: false },
 ];
 const MIN_TIP = LANES[0].y; // はやく はなしても ここまでは おりる
+
+/* たからばこを ひろうと、しばらく クレーンが 3つに なる。
+   ざいりょうを 3こ ずつ とれるように なるので、ふかく ねらう ごほうびに なる */
+const ARMS_POWER = 3;
+const ARM_SPREAD = 17;      // まんなかの つめから よこの つめまでの きょり(%)
+const POWER_TICKS = Math.round(22000 / TICK);  // つづく ながさ
+
+/* つめの よこの ならび。1つのときは まんなかだけ */
+const armOffsets = (n) => (n > 1 ? [-ARM_SPREAD, 0, ARM_SPREAD] : [0]);
 
 const SPAWN_TICKS = 32;     // つぎが ながれてくるまで
 const FLOAT_MAX = 7;        // どうじに ながれる かず
@@ -211,7 +224,9 @@ const dishOf = (d) => (d.kind === "orig" ? originalOf(d.ref) : recipeOf(d.ref));
 export default function CraneGame() {
   const [tab, setTab] = useState("sea");
   const [floats, setFloats] = useState([]);
-  const [crane, setCrane] = useState({ x: 50, y: TIP_TOP, phase: "idle", open: true, held: null });
+  const [crane, setCrane] = useState({
+    x: 50, y: TIP_TOP, phase: "idle", open: true, held: null, arms: 1, power: 0,
+  });
   const [bag, setBag] = useState({});
   const [known, setKnown] = useState([FIRST_RECIPE]);
   const [origs, setOrigs] = useState([]);      // じぶんで つくった りょうりの キー
@@ -242,7 +257,9 @@ export default function CraneGame() {
   const phaseRef = useRef("idle");
   const gripRef = useRef(0);
   const holdRef = useRef(false);  // まんなかの ボタンを おしているか
-  const heldRef = useRef(null);
+  const heldRef = useRef(null);   // つめの かず ぶんの はいれつ。とれなかった つめは null
+  const armsRef = useRef(1);      // いまの つめの かず
+  const powerRef = useRef(0);     // 3れんクレーンの のこり(フレーム)
   const spawnRef = useRef(SPAWN_TICKS);
   const bagRef = useRef({});
   const knownRef = useRef([FIRST_RECIPE]);
@@ -337,75 +354,117 @@ export default function CraneGame() {
     setBag((b) => ({ ...b, [id]: Math.min(BAG_CAP, (b[id] || 0) + n) }));
   }, []);
 
-  /* ---------- つかんだ ものを かごへ ---------- */
+  /* ---------- つかんだ ものを かごへ ----------
+     つめが 3つ あると いちどに 3こ とれる。
+     ふきだしが 3つ でると うるさいので、まとめて 1つに する */
   const deliver = useCallback(() => {
-    const held = heldRef.current;
+    const held = (heldRef.current || []).filter(Boolean);
     heldRef.current = null;
     phaseRef.current = "idle";
-    if (!held) return;
+    if (!held.length) return;
 
-    if (held.kind === "gift") {
-      /* たからばこは ふかいところ にしか ながれない。ふかく おろした ごほうび */
-      const n = GIFT_MIN + Math.floor(Math.random() * (GIFT_MAX - GIFT_MIN + 1));
-      const got = Array.from({ length: n }, () => pick(ING));
-      got.forEach((i) => addIng(i.id));
-      say(`🎁 あけたら ${got.map((i) => i.emoji).join("")} だった！`, "good");
-      blip(940, 0.26);
-      return;
+    /* たからばこ: しばらく クレーンが 3つに なる。
+       ざいりょうでは なく「とりやすさ」を くれる ほうが、
+       ふかくまで おろした ごほうびとして うれしい */
+    if (held.some((h) => h.kind === "gift")) {
+      armsRef.current = ARMS_POWER;
+      powerRef.current = POWER_TICKS;
+      /* よこの つめが がめんから はみでないように よせる */
+      xRef.current = Math.min(CRANE_MAX - ARM_SPREAD,
+                     Math.max(CRANE_MIN + ARM_SPREAD, xRef.current));
+      say("🎁 クレーンが 3つに なった！", "good");
+      blip(980, 0.3);
     }
 
-    if (held.kind === "recipe") {
+    /* レシピ */
+    held.filter((h) => h.kind === "recipe").forEach(() => {
       const rest = RECIPES.filter((r) => !knownRef.current.includes(r.id));
       if (rest.length) {
         const r = pick(rest);
-        setKnown((k) => [...k, r.id]);
+        knownRef.current = [...knownRef.current, r.id];
+        setKnown((k) => (k.includes(r.id) ? k : [...k, r.id]));
         say(`${r.emoji} ${r.name}の レシピを おぼえた！`, "good");
-        blip(880, 0.2);
       } else {
         const i = pick(ING);
         addIng(i.id);
         say(`レシピは ぜんぶ そろった！ ${i.emoji}を もらった`, "good");
-        blip(880, 0.2);
       }
-      return;
-    }
+      blip(880, 0.2);
+    });
 
-    const i = ingOf(held.ingId);
-    if ((bagRef.current[i.id] || 0) >= BAG_CAP) {
-      say(`${i.emoji} ${i.name}は もう いっぱい`, "warn");
-      blip(240, 0.16);
-      return;
+    /* ざいりょう。いっぱいの ものは かごに はいらない */
+    const ings = held.filter((h) => h.kind === "ing");
+    if (ings.length) {
+      const room = { ...bagRef.current };
+      const got = [];   // かごに はいった ざいりょう
+      const full = [];  // いっぱいで はいらなかった ざいりょう
+      ings.forEach((h) => {
+        const i = ingOf(h.ingId);
+        if ((room[i.id] || 0) >= BAG_CAP) {
+          if (!full.some((x) => x.id === i.id)) full.push(i);
+          return;
+        }
+        room[i.id] = (room[i.id] || 0) + 1;
+        got.push(i);
+      });
+      if (got.length) {
+        setBag((b) => {
+          const n = { ...b };
+          ings.forEach((h) => {
+            if ((n[h.ingId] || 0) < BAG_CAP) n[h.ingId] = (n[h.ingId] || 0) + 1;
+          });
+          return n;
+        });
+        say(got.length === 1
+          ? `${got[0].emoji} ${got[0].name}を つかまえた！`
+          : `${got.map((i) => i.emoji).join("")} ${got.length}こ つかまえた！`, "good");
+        blip(660);
+      }
+      if (full.length && !got.length) {
+        say(`${full.map((i) => i.emoji).join("")}は もう いっぱい`, "warn");
+        blip(240, 0.16);
+      }
     }
-    addIng(i.id);
-    say(`${i.emoji} ${i.name}を つかまえた！`, "good");
-    blip(660);
   }, [addIng, blip, say]);
 
-  /* ---------- つめが そこに ついた しゅんかん ---------- */
+  /* ---------- つめが そこに ついた しゅんかん ----------
+     つめ 1つに つき 1こまで。おなじ ものを 2つの つめで とらない */
   const gripNow = useCallback((list) => {
-    let best = null;
-    let bestD = Infinity;
-    list.forEach((f) => {
-      const dx = Math.abs(f.x - xRef.current);
-      const dy = Math.abs(LANES[f.lane].y - yRef.current);
-      if (dx >= CATCH_R || dy >= CATCH_V) return;
-      const d = dx + dy;
-      if (d < bestD) { best = f; bestD = d; }
+    const taken = new Set();
+    const power = armsRef.current > 1;
+    const held = armOffsets(armsRef.current).map((off) => {
+      const ax = xRef.current + off;
+      let best = null;
+      let bestD = Infinity;
+      list.forEach((f) => {
+        if (taken.has(f.id)) return;
+        const dx = Math.abs(f.x - ax);
+        /* dy が プラス ＝ つめさきより うえ（おりる とちゅうに とおった） */
+        const dy = yRef.current - LANES[f.lane].y;
+        const reach = power
+          ? dy >= -CATCH_V && dy <= CATCH_SWEEP
+          : Math.abs(dy) < CATCH_V;
+        if (dx >= CATCH_R || !reach) return;
+        const d = dx + Math.abs(dy);
+        if (d < bestD) { best = f; bestD = d; }
+      });
+      if (!best) return null;
+      taken.add(best.id);
+      return { kind: best.kind, ingId: best.ingId };
     });
-    if (!best) {
-      blip(200, 0.14);
-      return list;
-    }
-    heldRef.current = { kind: best.kind, ingId: best.ingId };
-    blip(520, 0.1);
-    return list.filter((f) => f.id !== best.id);
+    heldRef.current = held;
+    if (taken.size) blip(520, 0.1);
+    else blip(200, 0.14);
+    return list.filter((f) => !taken.has(f.id));
   }, [blip]);
 
   /* ---------- ながれてくる ものを つくる ----------
      もっている レシピで まだ たりない ざいりょうを おおめに ながす。
      すすめなくなる ことが ないように */
   const spawnOne = useCallback(() => {
-    if (Math.random() < GIFT_RATE) {
+    /* 3れんクレーンの あいだは たからばこを ながさない。
+       かさねて とれてしまうと、ずっと 3つの ままに なって とくべつ でなくなる */
+    if (armsRef.current === 1 && Math.random() < GIFT_RATE) {
       /* たからばこは いちばん ふかい ところだけ */
       return { kind: "gift", ingId: null, lane: 2 };
     }
@@ -460,13 +519,26 @@ export default function CraneGame() {
         }
       }
 
+      /* 3れんクレーンの のこり じかん。
+         0に なっても、おろしている とちゅうなら その 1かいは 3つのまま。
+         つかむ ちょくぜんに つめが きえたら ずるい */
+      if (powerRef.current > 0) powerRef.current -= 1;
+      if (powerRef.current <= 0 && armsRef.current > 1 && phaseRef.current === "idle") {
+        armsRef.current = 1;
+        blip(320, 0.18);
+      }
+
       /* クレーン */
       const p = phaseRef.current;
+      /* つめが 3つの あいだは、よこの つめが はみでない ぶんだけ せまく うごく */
+      const edge = armsRef.current > 1 ? ARM_SPREAD : 0;
+      const lo = CRANE_MIN + edge;
+      const hi = CRANE_MAX - edge;
       if (p === "idle") {
         /* ボタンを おしている あいだだけ うごく。じどうでは うごかない */
         if (moveRef.current !== 0) {
           const x = xRef.current + moveRef.current * CRANE_SPEED;
-          xRef.current = Math.min(CRANE_MAX, Math.max(CRANE_MIN, x));
+          xRef.current = Math.min(hi, Math.max(lo, x));
         }
       } else {
         moveRef.current = 0; /* おろしている あいだは よこに うごかない */
@@ -505,6 +577,8 @@ export default function CraneGame() {
         phase: phaseRef.current,
         open: phaseRef.current === "idle" || phaseRef.current === "down",
         held: heldRef.current,
+        arms: armsRef.current,
+        power: Math.max(0, powerRef.current) / POWER_TICKS,
       });
     }, TICK);
     return () => clearInterval(timer);
@@ -574,7 +648,8 @@ export default function CraneGame() {
     if (!el) return;
     const r = el.getBoundingClientRect();
     const pct = ((e.clientX - r.left) / r.width) * 100;
-    xRef.current = Math.min(CRANE_MAX, Math.max(CRANE_MIN, pct));
+    const edge = armsRef.current > 1 ? ARM_SPREAD : 0;
+    xRef.current = Math.min(CRANE_MAX - edge, Math.max(CRANE_MIN + edge, pct));
   };
   const dragStart = (e) => {
     if (phaseRef.current !== "idle") return;
@@ -780,7 +855,10 @@ export default function CraneGame() {
       {/* ===== うみ ===== */}
       {tab === "sea" && (
         <div style={{ padding: 8 }}>
-          <p style={hint}>◀ ▶ で よこ、まんなかを ながおしで ふかさ。はなすと つかむ！</p>
+          <p style={hint}>
+            ◀ ▶ で よこ、まんなかを ながおしで ふかさ。はなすと つかむ！<br />
+            <span style={{ fontSize: 13 }}>🎁 いちばん ふかいところの たからばこを とると クレーンが 3つ！</span>
+          </p>
 
           {/* きょうたい。UFOキャッチャーの わく */}
           <div style={{ position: "relative", padding: 10, borderRadius: 26,
@@ -873,29 +951,64 @@ export default function CraneGame() {
               );
             })}
 
-            {/* ワイヤー。つめの あたままで のばす */}
-            <div style={{ position: "absolute", left: `${crane.x}%`, top: `${RAIL_Y}%`,
-              width: 3, marginLeft: -1.5, background: "#44586a", pointerEvents: "none",
-              height: `calc(${Math.max(0, crane.y - RAIL_Y)}% - ${CLAW_TIP_PX}px)` }} />
+            {/* 3つの ときは よこの つめを つなぐ はり */}
+            {crane.arms > 1 && (
+              <div style={{ position: "absolute", top: `${RAIL_Y}%`,
+                left: `${crane.x - ARM_SPREAD}%`, width: `${ARM_SPREAD * 2}%`,
+                height: 7, marginTop: 7, borderRadius: 4, pointerEvents: "none",
+                background: "linear-gradient(180deg,#ffd86f 0%,#d99f24 100%)",
+                boxShadow: "0 2px 3px rgba(0,0,0,.3)" }} />
+            )}
 
-            {/* だいしゃ */}
-            <Trolley x={crane.x} />
+            {/* つめ 1つぶんを、ならんでいる かずだけ かく */}
+            {armOffsets(crane.arms).map((off, k) => {
+              const ax = crane.x + off;
+              const item = crane.held ? crane.held[k] : null;
+              return (
+                <React.Fragment key={k}>
+                  {/* ワイヤー。つめの あたままで のばす */}
+                  <div style={{ position: "absolute", left: `${ax}%`, top: `${RAIL_Y}%`,
+                    width: 3, marginLeft: -1.5, background: "#44586a", pointerEvents: "none",
+                    height: `calc(${Math.max(0, crane.y - RAIL_Y)}% - ${CLAW_TIP_PX}px)` }} />
 
-            {/* つめ ＋ つかんだもの。crane.y は つめさきの いち */}
-            <div style={{ position: "absolute", left: `${crane.x}%`, top: `${crane.y}%`,
-              marginTop: -CLAW_TIP_PX, transform: "translateX(-50%)",
-              pointerEvents: "none", lineHeight: 0 }}>
-              <Claw open={crane.open} />
-              {crane.held && (
-                <div style={{ position: "absolute", top: CLAW_TIP_PX - 14, left: "50%",
-                  transform: "translateX(-50%)", fontSize: 30, lineHeight: 1,
-                  filter: "drop-shadow(0 3px 4px rgba(0,0,0,.3))" }}>
-                  {crane.held.kind === "recipe" ? "📜"
-                    : crane.held.kind === "gift" ? "🎁"
-                    : ingOf(crane.held.ingId).emoji}
+                  {/* だいしゃ */}
+                  <Trolley x={ax} />
+
+                  {/* つめ ＋ つかんだもの。crane.y は つめさきの いち */}
+                  <div style={{ position: "absolute", left: `${ax}%`, top: `${crane.y}%`,
+                    marginTop: -CLAW_TIP_PX, transform: "translateX(-50%)",
+                    pointerEvents: "none", lineHeight: 0 }}>
+                    <Claw open={crane.open} gold={crane.arms > 1} />
+                    {item && (
+                      <div style={{ position: "absolute", top: CLAW_TIP_PX - 14, left: "50%",
+                        transform: "translateX(-50%)", fontSize: 30, lineHeight: 1,
+                        filter: "drop-shadow(0 3px 4px rgba(0,0,0,.3))" }}>
+                        {item.kind === "recipe" ? "📜"
+                          : item.kind === "gift" ? "🎁"
+                          : ingOf(item.ingId).emoji}
+                      </div>
+                    )}
+                  </div>
+                </React.Fragment>
+              );
+            })}
+
+            {/* のこり じかん。かずを よめなくても バーの ながさで わかる */}
+            {crane.arms > 1 && (
+              <div style={{ position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)",
+                background: "rgba(255,255,255,.94)", borderRadius: 999, padding: "5px 12px 6px",
+                border: `3px solid ${C.gold}`, pointerEvents: "none", textAlign: "center",
+                boxShadow: "0 3px 6px rgba(0,0,0,.25)" }}>
+                <div style={{ fontSize: 13, fontWeight: 800, lineHeight: 1.2 }}>
+                  🎁 3れんクレーン！
                 </div>
-              )}
-            </div>
+                <div style={{ width: 116, height: 7, borderRadius: 999, marginTop: 3,
+                              background: "#e7d9bd", overflow: "hidden" }}>
+                  <div style={{ width: `${crane.power * 100}%`, height: "100%",
+                                background: C.coral, transition: "width .1s linear" }} />
+                </div>
+              </div>
+            )}
 
             {/* まえの ガラス */}
             <div style={{ position: "absolute", inset: 0, pointerEvents: "none",
@@ -1327,9 +1440,13 @@ function Trolley({ x }) {
 /* つめ。UFOキャッチャーの 3ぼんづめ。
    おろす あいだは ひらいていて、そこで とじる。
    よこの つめは じぶんの つけねを じくに かいてんする */
-function Claw({ open }) {
+function Claw({ open, gold = false }) {
   const a = open ? 22 : -16;   // ひだりの つめの かくど。みぎは その ぎゃく
   const back = open ? -4 : 3;
+  /* 3れんクレーンの あいだは きんいろ。とくべつな じょうたいだと ひとめで わかる */
+  const body = gold ? "#ffc93c" : "#e8452f";
+  const bodyEdge = gold ? "#a3760a" : "#8f2417";
+  const bodyLite = gold ? "#fff0bd" : "#ffb3a5";
   const arm = (d, ang, px, py, isBack = false) => (
     <g transform={`rotate(${ang} ${px} ${py})`} style={{ transition: "transform .18s" }}>
       <path d={d} stroke={isBack ? "#22303f" : "#2f4152"} strokeWidth={isBack ? 10 : 13}
@@ -1346,10 +1463,10 @@ function Claw({ open }) {
       {/* ワイヤーの つけね */}
       <rect x="31" y="0" width="10" height="7" rx="3" fill="#b8c6d2" stroke="#3f5266" strokeWidth="2.5" />
       <circle cx="36" cy="9" r="4.5" fill="#9fb4c6" stroke="#3f5266" strokeWidth="2.5" />
-      {/* あかい ほんたい */}
-      <path d="M22 12 H50 L46.5 22 H25.5 Z" fill="#e8452f" stroke="#8f2417"
+      {/* ほんたい */}
+      <path d="M22 12 H50 L46.5 22 H25.5 Z" fill={body} stroke={bodyEdge}
         strokeWidth="2.5" strokeLinejoin="round" />
-      <rect x="27" y="14.5" width="8" height="4" rx="2" fill="#ffb3a5" />
+      <rect x="27" y="14.5" width="8" height="4" rx="2" fill={bodyLite} />
       {/* まえの つめ（2ほん） */}
       {arm("M27 20 C24 28, 22 36, 26 46", a, 27, 20)}
       {arm("M45 20 C48 28, 50 36, 46 46", -a, 45, 20)}
