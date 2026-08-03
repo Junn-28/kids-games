@@ -12,6 +12,14 @@ export const GAMES = [
     age: "3さい〜",
     color: "#1b8ed0",
   },
+  {
+    id: "crane",
+    title: "クレーンキッチン",
+    emoji: "🪝",
+    tagline: "つって、つくって、たべてもらう",
+    age: "4さい〜",
+    color: "#e8452f",
+  },
 ];
 
 /* 相対リンク。どの階層に置かれても壊れない */
