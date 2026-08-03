@@ -145,6 +145,11 @@ const GUESTS = [
   { emoji: "🦁", name: "らいおんさん" },
 ];
 
+/* おきゃくさんが ほしい ものを アイコン 1つで あらわす。
+   じは よめなくても、この えを さがせば つくる ものが わかる */
+const wantIcon = (want) => (want === "any" ? "❓" : recipeOf(want).emoji);
+const wantName = (want) => (want === "any" ? "なんでも" : recipeOf(want).name);
+
 const GUEST_WAIT = 2600;   // つぎの おきゃくさんが くるまで(ms)
 const GIFT_MIN = 2;        // おれいに もらえる ざいりょう
 const GIFT_MAX = 3;
@@ -231,13 +236,19 @@ export default function CraneGame() {
   const [known, setKnown] = useState([FIRST_RECIPE]);
   const [origs, setOrigs] = useState([]);      // じぶんで つくった りょうりの キー
   const [dishes, setDishes] = useState([]);    // { id, kind:"recipe"|"orig", ref }
-  const [eaten, setEaten] = useState({});      // レシピの りょうりを たべた かず
-  const [origEaten, setOrigEaten] = useState({});
+  /* ずかんは「つくった かず」で かぞえる。
+     たべた かずに すると、おきゃくさんに あげた ぶんが のこらない。
+     せっかく つくったのに ずかんが うまらないのは かなしい */
+  const [made, setMade] = useState({});
+  const [origMade, setOrigMade] = useState({});
   const [served, setServed] = useState(0);
+  const [cleared, setCleared] = useState(false);   // ぜんぶ つくった ことが あるか
+  const [clearShow, setClearShow] = useState(false);
   const [guest, setGuest] = useState(null);    // { id, emoji, name, want }
   const [cook, setCook] = useState(null);      // { dish }
   const [eating, setEating] = useState(null);  // { dishId, dish }
   const [freeing, setFreeing] = useState(false);
+  const [askReset, setAskReset] = useState(false);
   const [sound, setSound] = useState(true);
   const [toasts, setToasts] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -312,34 +323,39 @@ export default function CraneGame() {
             .map((x) => ({ id: nextId(), kind: x.kind === "orig" ? "orig" : "recipe", ref: x.ref }))
         );
       }
-      if (d.eaten && typeof d.eaten === "object" && !Array.isArray(d.eaten)) {
-        const e = {};
+      /* d.eaten は ふるい セーブの なまえ。それまでの ずかんを けさない */
+      const madeSrc = d.made ?? d.eaten;
+      if (madeSrc && typeof madeSrc === "object" && !Array.isArray(madeSrc)) {
+        const m = {};
         RECIPES.forEach((r) => {
-          const n = Math.floor(safeNum(d.eaten[r.id], 0, 99999, 0));
-          if (n > 0) e[r.id] = n;
+          const n = Math.floor(safeNum(madeSrc[r.id], 0, 99999, 0));
+          if (n > 0) m[r.id] = n;
         });
-        setEaten(e);
+        setMade(m);
       }
-      if (d.origEaten && typeof d.origEaten === "object" && !Array.isArray(d.origEaten)) {
-        const e = {};
+      const origSrc = d.origMade ?? d.origEaten;
+      if (origSrc && typeof origSrc === "object" && !Array.isArray(origSrc)) {
+        const m = {};
         okOrigs.forEach((k) => {
-          const n = Math.floor(safeNum(d.origEaten[k], 0, 99999, 0));
-          if (n > 0) e[k] = n;
+          const n = Math.floor(safeNum(origSrc[k], 0, 99999, 0));
+          if (n > 0) m[k] = n;
         });
-        setOrigEaten(e);
+        setOrigMade(m);
       }
       setServed(Math.floor(safeNum(d.served, 0, 99999, 0)));
+      if (d.cleared === true) setCleared(true);
     }
     setLoaded(true);
   }, []);
 
   /* ---------- じどうセーブ ---------- */
   const dishSig = useMemo(() => dishes.map((d) => `${d.kind}:${d.ref}`).join(","), [dishes]);
+  const madeSig = useMemo(() => JSON.stringify(made) + JSON.stringify(origMade), [made, origMade]);
   useEffect(() => {
     if (!loaded || !save.available) return;
     const t = setTimeout(() => {
       const ok = save.save({
-        v: 1, sound, bag, known, origs, eaten, origEaten, served,
+        v: 1, sound, bag, known, origs, made, origMade, served, cleared,
         dishes: dishes.map((d) => ({ kind: d.kind, ref: d.ref })),
       });
       if (!ok) return; /* ほぞん できなくても あそべる */
@@ -347,7 +363,7 @@ export default function CraneGame() {
       setTimeout(() => { if (aliveRef.current) setSaving(false); }, 600);
     }, 700);
     return () => clearTimeout(t);
-  }, [loaded, sound, bag, known, origs, dishSig, eaten, origEaten, served]);
+  }, [loaded, sound, bag, known, origs, dishSig, madeSig, served, cleared]);
 
   /* ---------- ざいりょうを かごへ ---------- */
   const addIng = useCallback((id, n = 1) => {
@@ -622,6 +638,41 @@ export default function CraneGame() {
     setTimeout(() => { if (aliveRef.current) setGuest(null); }, 2600);
   };
 
+  /* ---------- はじめから ----------
+     セーブも あつめた ものも ぜんぶ けす。
+     おとの せっていだけは このみなので のこす */
+  const resetAll = () => {
+    save.clear();
+    setBag({});
+    setKnown([FIRST_RECIPE]);
+    knownRef.current = [FIRST_RECIPE];  /* おきゃくさんが すぐ たのむので さきに あわせる */
+    bagRef.current = {};
+    setOrigs([]);
+    setDishes([]);
+    setMade({});
+    setOrigMade({});
+    setServed(0);
+    setCleared(false);
+    setClearShow(false);
+    setGuest(null);
+    setCook(null);
+    setEating(null);
+    setFreeing(false);
+    setAskReset(false);
+    /* うみも まっさらに もどす */
+    floatsRef.current = [];
+    setFloats([]);
+    armsRef.current = 1;
+    powerRef.current = 0;
+    heldRef.current = null;
+    phaseRef.current = "idle";
+    yRef.current = TIP_TOP;
+    xRef.current = 50;
+    setTab("sea");
+    say("はじめから！ いってらっしゃい", "good");
+    blip(520, 0.3);
+  };
+
   /* ---------- そうさ ---------- */
   /* まんなかの ボタン: おしている あいだ おりる。はなした ふかさで つかむ */
   const drop = () => {
@@ -737,11 +788,20 @@ export default function CraneGame() {
     if (d.isOrig) {
       const isNew = !origs.includes(d.key);
       if (isNew) setOrigs((o) => [...o, d.key]);
+      setOrigMade((m) => ({ ...m, [d.key]: (m[d.key] || 0) + 1 }));
       setDishes((list) => [...list, { id: nextId(), kind: "orig", ref: d.key }]);
       say(isNew ? `${d.emoji} 「${d.name}」を はつめいした！` : `${d.emoji} ${d.name}が できた！`, "good");
     } else {
+      const next = { ...made, [d.id]: (made[d.id] || 0) + 1 };
+      setMade(next);
       setDishes((list) => [...list, { id: nextId(), kind: "recipe", ref: d.id }]);
       say(`${d.emoji} ${d.name}が できた！`, "good");
+      /* レシピの りょうりを ぜんぶ つくったら クリア。いちどだけ おいわいする */
+      if (!cleared && RECIPES.every((r) => next[r.id] > 0)) {
+        setCleared(true);
+        setClearShow(true);
+        blip(1040, 0.4);
+      }
     }
     setCook(null);
   };
@@ -756,8 +816,6 @@ export default function CraneGame() {
   const finishEat = () => {
     const d = eating.dish;
     setDishes((list) => list.filter((x) => x.id !== eating.dishId));
-    if (d.isOrig) setOrigEaten((e) => ({ ...e, [d.key]: (e[d.key] || 0) + 1 }));
-    else setEaten((e) => ({ ...e, [d.id]: (e[d.id] || 0) + 1 }));
     setEating(null);
     say(`${d.name}、ごちそうさま！ 😋`, "good");
   };
@@ -765,8 +823,7 @@ export default function CraneGame() {
   /* ---------- みため ---------- */
   const bagList = ING.filter((i) => (bag[i.id] || 0) > 0);
   const bagTotal = bagList.reduce((s, i) => s + bag[i.id], 0);
-  const eatenTotal = RECIPES.reduce((s, r) => s + (eaten[r.id] || 0), 0)
-    + origs.reduce((s, k) => s + (origEaten[k] || 0), 0);
+  const madeKinds = RECIPES.filter((r) => made[r.id] > 0).length;
   const canFree = bagList.length >= FREE_MIN;
 
   const pill = {
@@ -827,6 +884,9 @@ export default function CraneGame() {
           <span style={{ fontSize: 12 }}>/{RECIPES.length}</span></div>
         <div style={pill}><span style={{ fontSize: 18 }}>😊</span>
           <b style={{ fontSize: 18 }}>{served}</b></div>
+        {cleared && (
+          <span title="さいこうの コックさん" style={{ fontSize: 20 }}>👑</span>
+        )}
         <span style={{ marginLeft: "auto", fontSize: 16, opacity: saving ? 1 : 0.15,
                        transition: "opacity .3s" }} title="セーブちゅう">💾</span>
         <button className="bigbtn" onClick={() => setSound((s) => !s)} aria-label="おと"
@@ -851,6 +911,21 @@ export default function CraneGame() {
           </button>
         ))}
       </div>
+
+      {/* おきゃくさんの ちゅうもん。うみでも キッチンでも ずっと みえている。
+          おみせタブでは おきゃくさん そのものが いるので ださない */}
+      {guest && !guest.done && tab !== "eat" && (
+        <button className="bigbtn" onClick={() => setTab("eat")}
+          style={{ display: "flex", alignItems: "center", gap: 8, width: "calc(100% - 16px)",
+                   margin: "0 8px 6px", padding: "7px 12px", borderRadius: 999,
+                   background: "#fff", border: `3px solid ${C.coral}`, textAlign: "left" }}>
+          <span style={{ fontSize: 26, animation: "hop 1.6s ease-in-out infinite" }}>{guest.emoji}</span>
+          <span style={{ fontSize: 13, opacity: 0.7 }}>ちゅうもん</span>
+          <span style={{ fontSize: 18 }}>→</span>
+          <span style={{ fontSize: 30, lineHeight: 1 }}>{wantIcon(guest.want)}</span>
+          <span style={{ fontSize: 14, fontWeight: 800 }}>{wantName(guest.want)}</span>
+        </button>
+      )}
 
       {/* ===== うみ ===== */}
       {tab === "sea" && (
@@ -1082,9 +1157,18 @@ export default function CraneGame() {
                 );
               }
               const ready = hasAll(bag, r.need);
+              /* おきゃくさんが たのんでいる りょうりに かおを つける。
+                 ちゅうもんの アイコンと おなじ えを さがせば たどりつける */
+              const ordered = guest && !guest.done && guest.want === r.id;
               return (
-                <div key={r.id} style={{ background: "#fff", borderRadius: 18, padding: 12,
-                  border: `3px solid ${ready ? C.coral : C.gold}`, textAlign: "center" }}>
+                <div key={r.id} style={{ position: "relative", background: "#fff",
+                  borderRadius: 18, padding: 12, textAlign: "center",
+                  border: `3px solid ${ordered ? "#4fc36a" : ready ? C.coral : C.gold}`,
+                  boxShadow: ordered ? "0 0 0 3px rgba(79,195,106,.35)" : "none" }}>
+                  {ordered && (
+                    <span style={{ position: "absolute", top: -12, right: -6, fontSize: 26,
+                      animation: "hop 1.6s ease-in-out infinite" }}>{guest.emoji}</span>
+                  )}
                   <div style={{ fontSize: 38, lineHeight: 1.1 }}>{r.emoji}</div>
                   <div style={{ fontSize: 16, fontWeight: 800, margin: "2px 0 6px" }}>{r.name}</div>
                   <div style={{ display: "flex", justifyContent: "center", gap: 4,
@@ -1160,13 +1244,27 @@ export default function CraneGame() {
             })}
           </div>
 
-          {/* たべたよ ずかん */}
+          {/* つくったよ ずかん。ぜんぶ うまると クリア */}
           <h3 style={{ fontSize: 16, margin: "14px 0 6px", textAlign: "center" }}>
-            🌟 たべたよ ずかん（{eatenTotal}こ）
+            🌟 つくったよ ずかん（{madeKinds}/{RECIPES.length}）
           </h3>
+          {cleared ? (
+            <button className="bigbtn" onClick={() => setClearShow(true)}
+              style={{ width: "100%", marginBottom: 8, padding: "10px 12px", borderRadius: 16,
+                       background: "linear-gradient(120deg,#ffd86f 0%,#ffb347 100%)",
+                       color: "#5b2f00", fontSize: 15, boxShadow: "0 4px 0 #d1873c" }}>
+              👑 さいこうの コックさん！
+            </button>
+          ) : (
+            <div style={{ height: 12, borderRadius: 999, background: "#e7d9bd",
+                          overflow: "hidden", marginBottom: 8 }}>
+              <div style={{ width: `${(madeKinds / RECIPES.length) * 100}%`, height: "100%",
+                            background: C.coral, transition: "width .3s" }} />
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(76px,1fr))", gap: 6 }}>
             {RECIPES.map((r) => {
-              const n = eaten[r.id] || 0;
+              const n = made[r.id] || 0;
               return (
                 <div key={r.id} style={{ background: n ? "#fff" : "#eee6d8", borderRadius: 14,
                   padding: "8px 2px", textAlign: "center",
@@ -1194,7 +1292,7 @@ export default function CraneGame() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(112px,1fr))", gap: 6 }}>
               {origs.map((k) => {
                 const o = originalOf(k);
-                const n = origEaten[k] || 0;
+                const n = origMade[k] || 0;
                 return (
                   <div key={k} style={{ background: "#fff", borderRadius: 14, padding: "8px 4px",
                     textAlign: "center", border: "3px solid #ff9f68" }}>
@@ -1206,17 +1304,62 @@ export default function CraneGame() {
                       {o.need.map((id) => ingOf(id).emoji).join("")}
                     </div>
                     <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.8 }}>
-                      {n ? `たべた ×${n}` : "まだ たべてない"}
+                      つくった ×{n}
                     </div>
                   </div>
                 );
               })}
             </div>
           )}
+          {/* はじめから。まちがえて おしても だいじょうぶなよう 2だんかいに する */}
+          <div style={{ marginTop: 20, marginBottom: 8, textAlign: "center" }}>
+            {!askReset ? (
+              <>
+                <button className="bigbtn" onClick={() => setAskReset(true)}
+                  style={{ background: "transparent", color: "#8aa6b8", fontSize: 13,
+                           padding: "10px 14px", borderRadius: 12 }}>
+                  🔄 はじめから やりなおす
+                </button>
+                <div style={{ fontSize: 12, color: "#a9bccb", marginTop: 2 }}>
+                  {save.available
+                    ? "💾 じどうで セーブされます"
+                    : "⚠️ この ブラウザでは セーブできません"}
+                </div>
+              </>
+            ) : (
+              <div style={{ background: "#fff", borderRadius: 18, padding: 14,
+                            border: `3px solid ${C.gold}` }}>
+                <div style={{ fontSize: 15, fontWeight: 900, marginBottom: 4 }}>
+                  ほんとうに はじめから？
+                </div>
+                <div style={{ fontSize: 13, color: "#8aa6b8", marginBottom: 10, lineHeight: 1.5 }}>
+                  かごも レシピも ずかんも、はつめいした りょうりも<br />
+                  ぜんぶ きえて さいしょに もどります
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="bigbtn" onClick={resetAll}
+                    style={{ flex: 1, padding: "12px 4px", fontSize: 16, borderRadius: 14,
+                             background: C.coral, color: "#fff", boxShadow: "0 3px 0 #c9522a" }}>
+                    はい
+                  </button>
+                  <button className="bigbtn" onClick={() => setAskReset(false)}
+                    style={{ flex: 1, padding: "12px 4px", fontSize: 16, borderRadius: 14,
+                             background: "#dfe9f0", color: C.ink, boxShadow: "0 3px 0 #bdcbd6" }}>
+                    やめる
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           <ToastRow toasts={toasts} fixed />
         </div>
       )}
 
+      {clearShow && (
+        <ClearModal made={made} origs={origs} served={served}
+          onClose={() => setClearShow(false)} />
+      )}
       {freeing && (
         <FreeModal bag={bag} bagList={bagList} blip={blip}
           onMake={startFree} onCancel={() => setFreeing(false)} />
@@ -1282,11 +1425,23 @@ function GuestCard({ guest, dishes, onServe }) {
     <div style={{ background: "#fff", borderRadius: 20, padding: "12px", marginBottom: 10,
                   border: `3px solid ${C.coral}`, display: "flex", gap: 10, alignItems: "center" }}>
       <div style={{ fontSize: 46, animation: "hop 1.6s ease-in-out infinite" }}>{guest.emoji}</div>
+
+      {/* おもっている ことの ふきだし。
+          なにが ほしいかを おおきな アイコン 1つで みせる */}
+      <div style={{ position: "relative", flexShrink: 0, marginLeft: 4,
+                    background: "#fff6e3", border: `3px solid ${C.gold}`, borderRadius: 20,
+                    padding: "6px 12px", textAlign: "center" }}>
+        <span style={{ position: "absolute", left: -11, top: 20, width: 9, height: 9,
+          borderRadius: "50%", background: "#fff6e3", border: `3px solid ${C.gold}` }} />
+        <span style={{ position: "absolute", left: -19, top: 30, width: 6, height: 6,
+          borderRadius: "50%", background: "#fff6e3", border: `2px solid ${C.gold}` }} />
+        <div style={{ fontSize: 40, lineHeight: 1.1 }}>{wantIcon(guest.want)}</div>
+        <div style={{ fontSize: 11, fontWeight: 800, marginTop: 1 }}>{wantName(guest.want)}</div>
+      </div>
+
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 15, fontWeight: 800 }}>
-          {wantAny
-            ? "なにか おいしいもの ちょうだい！"
-            : <>{wanted.emoji} {wanted.name}が たべたいな</>}
+          {wantAny ? "なにか おいしいもの ちょうだい！" : `${wanted.name}が たべたいな`}
         </div>
         {okDishes.length === 0 ? (
           <div style={{ fontSize: 13, opacity: 0.7, marginTop: 4 }}>
@@ -1307,6 +1462,67 @@ function GuestCard({ guest, dishes, onServe }) {
             })}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ================= クリア ================= */
+
+/* レシピの りょうりを ぜんぶ つくったら でる。
+   ここで おわりでは なく、このあとも あそべる。
+   ゲームを とめて しまわないよう「とじる」だけに する */
+function ClearModal({ made, origs, served, onClose }) {
+  const total = RECIPES.reduce((s, r) => s + (made[r.id] || 0), 0);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.65)", zIndex: 30,
+                  display: "flex", alignItems: "center", justifyContent: "center", padding: 14 }}>
+      <div style={{ background: "linear-gradient(160deg,#fff7dd 0%,#ffe6c2 100%)",
+                    borderRadius: 26, padding: "18px 16px", width: "100%", maxWidth: 360,
+                    textAlign: "center", border: `5px solid ${C.gold}`, position: "relative",
+                    maxHeight: "90vh", overflowY: "auto" }}>
+        {/* きらきら */}
+        {[8, 26, 50, 74, 90].map((l, i) => (
+          <span key={i} style={{ position: "absolute", top: 8 + (i % 3) * 16, left: `${l}%`,
+            fontSize: 16 + (i % 3) * 6, pointerEvents: "none",
+            animation: `sparkleTurn ${2 + i * 0.3}s ease-in-out ${i * 0.2}s infinite` }}>✨</span>
+        ))}
+
+        <div style={{ fontSize: 72, lineHeight: 1.1, animation: "pop .5s ease-out" }}>👨‍🍳</div>
+        <div style={{ fontSize: 24, fontWeight: 900, margin: "6px 0 2px", color: "#b3560f" }}>
+          さいこうの コックさんに<br />なった！
+        </div>
+        <div style={{ fontSize: 14, opacity: 0.8, margin: "8px 0 12px", lineHeight: 1.6 }}>
+          レシピの りょうりを<br />ぜんぶ つくったよ 🎉
+        </div>
+
+        {/* つくった りょうりを ならべる */}
+        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 6,
+                      background: "rgba(255,255,255,.7)", borderRadius: 16, padding: 10,
+                      marginBottom: 12 }}>
+          {RECIPES.map((r) => (
+            <span key={r.id} style={{ fontSize: 30, lineHeight: 1,
+              filter: "drop-shadow(0 2px 3px rgba(0,0,0,.2))" }}>{r.emoji}</span>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "center", gap: 14, fontSize: 13,
+                      marginBottom: 14, flexWrap: "wrap" }}>
+          <span>🍳 つくった <b style={{ fontSize: 17 }}>{total}</b></span>
+          <span>😊 あげた <b style={{ fontSize: 17 }}>{served}</b></span>
+          <span>✨ はつめい <b style={{ fontSize: 17 }}>{origs.length}</b></span>
+        </div>
+
+        <div style={{ fontSize: 13, opacity: 0.75, marginBottom: 10, lineHeight: 1.6 }}>
+          まだ あそべるよ。<br />
+          じぶんだけの りょうりを もっと つくってみよう ✨
+        </div>
+
+        <button className="bigbtn" onClick={onClose}
+          style={{ width: "100%", padding: "16px 8px", fontSize: 20, borderRadius: 16,
+                   background: C.coral, color: "#fff", boxShadow: "0 5px 0 #c9522a" }}>
+          つづける
+        </button>
       </div>
     </div>
   );
