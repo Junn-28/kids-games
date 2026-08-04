@@ -28,12 +28,39 @@ const NEW_OUTSIDE = new Map([
 /* 中身が新しい ZWJ 合字。分解して出るぶん × よりはマシだが、崩れる */
 const NEW_ZWJ = new Map([["🐻‍❄️", "13.0"], ["🧔‍♀️", "13.0"], ["👨‍🍼", "13.0"]]);
 
+/* あえて そのままに しているもの。
+   さかなやさんの これらは 生き物や うみの 見た目 そのもの で、
+   置きかえると べつの 生き物に なってしまう。
+   実際に 困っていない ので のこす（2026-08 の はんだん）。
+   あたらしい ゲームでは つかわないこと。ここに 足すのは、
+   「置きかえると 中身が 変わってしまう」ときだけ。 */
+const ALLOW = {
+  "games/sakana/SakanaGame.jsx": [
+    "U+1F93F",  // 🤿 ダイバー
+    "U+1FAB8",  // 🪸 あさいうみの かざり
+    "U+1FA90",  // 🪐 うちゅうのうみの かざり
+    "U+1FAA5",  // 🪥 はのうみの かざり
+    "U+1FA9F",  // 🪟 ドアのうみの かざり
+    "U+1FAE7",  // 🫧 クラゲのうみの かざり
+    "U+1FABC",  // 🪼 クラゲ（11.0以前に クラゲの絵文字が ない）
+    "U+1FA99",  // 🪙 おかね
+    "🐻‍❄️",      // しろくま
+  ],
+};
+
+const allowedIn = (file, code) => {
+  const key = file.replace(/^[.\\/]+/, "").split("\\").join("/");
+  return (ALLOW[key] || []).includes(code);
+};
+
 const walk = (dir, out = []) => {
   for (const name of readdirSync(dir)) {
     if (name === "node_modules" || name === "dist" || name === ".git") continue;
     const p = join(dir, name);
     if (statSync(p).isDirectory()) walk(p, out);
-    else if ([".jsx", ".js", ".html", ".md", ".css"].includes(extname(p))) out.push(p);
+    /* .md は見ない。ルールを説明する文書は、だめな絵文字そのものを
+       例として書く必要があるし、ゲームの画面には出ない */
+    else if ([".jsx", ".js", ".html", ".css"].includes(extname(p))) out.push(p);
   }
   return out;
 };
@@ -49,19 +76,20 @@ for (const file of walk(root)) {
     const cp = ch.codePointAt(0);
     const inExtA = cp >= EXT_A[0] && cp <= EXT_A[1];
     if (!inExtA && !NEW_OUTSIDE.has(cp)) continue;
+    const code = "U+" + cp.toString(16).toUpperCase();
+    if (allowedIn(file, code)) continue;
     const key = file + cp;
     if (seen.has(key)) continue;
     seen.add(key);
     const line = src.slice(0, src.indexOf(ch)).split("\n").length;
     problems.push({
-      file, line, ch,
-      cp: "U+" + cp.toString(16).toUpperCase(),
+      file, line, ch, cp: code,
       why: NEW_OUTSIDE.get(cp) || "Unicode 12.0 以降",
     });
   }
 
   for (const [seq, ver] of NEW_ZWJ) {
-    if (!src.includes(seq)) continue;
+    if (!src.includes(seq) || allowedIn(file, seq)) continue;
     const line = src.slice(0, src.indexOf(seq)).split("\n").length;
     problems.push({ file, line, ch: seq, cp: "ZWJ合字", why: `Unicode ${ver}` });
   }
