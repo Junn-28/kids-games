@@ -88,8 +88,16 @@ const ORIG_SUFFIX = {
   heat: ["やき", "いため", "スープ", "シチュー", "グラタン"],
 };
 
-/* にくの プリンでも いい。へんな くみあわせほど おもしろい */
-const ORIG_EMOJI = ["🍲","🥘","🍛","🥗","🍱","🥙","🌮","🧆","🥧","🍮","🥞","🍝","🥪","🍢","🍥","🫕","🍜","🧁"];
+/* にくの プリンでも いい。へんな くみあわせほど おもしろい。
+
+   ここに ならべる えは Unicode 11.0（2018年）までの ものだけに する。
+   それより あたらしい えは、すこし ふるい タブレットの フォントに
+   はいっていなくて □ や × に なる。ざいりょうの 🥬🥩 が 11.0 なので
+   そこが この ゲームの さかいめ。
+   ならびじゅんは かえない。じゅんばんが ずれると、まえに はつめいした
+   りょうりの えが かわってしまう（おなじ くみあわせ＝おなじ りょうり が
+   この しくみの やくそく なので） */
+const ORIG_EMOJI = ["🍲","🥘","🍛","🥗","🍱","🥙","🌮","🧆","🥧","🍮","🥞","🍝","🥪","🍢","🍥","🍰","🍜","🧁"];
 
 function makeOriginal(ids) {
   /* なまえは とった じゅんばんではなく id じゅん。
@@ -897,7 +905,7 @@ export default function CraneGame() {
 
       {/* タブ。おきゃくさんが まっていると たべるタブに かおが でる */}
       <div style={{ display: "flex", gap: 6, padding: 8, background: C.cream }}>
-        {[["sea", "🪝 うみ"], ["kitchen", "🍳 キッチン"], ["eat", "🍽️ おみせ"]].map(([key, label]) => (
+        {[["sea", "🎣 うみ"], ["kitchen", "🍳 キッチン"], ["eat", "🍽️ おみせ"]].map(([key, label]) => (
           <button key={key} className="bigbtn" onClick={() => setTab(key)}
             style={{ position: "relative", flex: 1, padding: "12px 4px", fontSize: 16, borderRadius: 16,
                      background: tab === key ? C.coral : "#ffe9c9",

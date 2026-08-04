@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:emoji": "node tools/check-emoji.mjs ."
   },
   "dependencies": {
     "react": "^19.2.0",

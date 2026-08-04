@@ -15,7 +15,7 @@ export const GAMES = [
   {
     id: "crane",
     title: "クレーンキッチン",
-    emoji: "🪝",
+    emoji: "🎣",
     tagline: "つって、つくって、たべてもらう",
     age: "4さい〜",
     color: "#e8452f",
