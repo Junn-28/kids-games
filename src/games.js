@@ -20,6 +20,22 @@ export const GAMES = [
     age: "4さい〜",
     color: "#e8452f",
   },
+  {
+    id: "kotoba",
+    title: "ことばシャボン",
+    emoji: "💭",
+    tagline: "えの なまえを もじで つくる",
+    age: "5さい〜",
+    color: "#8e5bc4",
+  },
+  {
+    id: "robot",
+    title: "ロボットおつかい",
+    emoji: "🤖",
+    tagline: "めいれいを ならべて おうちへ かえる",
+    age: "5さい〜",
+    color: "#4e8b3f",
+  },
 ];
 
 /* 相対リンク。どの階層に置かれても壊れない */
