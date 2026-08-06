@@ -69,23 +69,24 @@ const WORDS = [
 const MODES = [
   { id: "num",  icon: "🔢", name: "すうじ",     tip: "1 から じゅんばんに",           age: "3さい〜" },
   { id: "word", icon: "💭", name: "ことば",     tip: "えの なまえの もじの じゅんに", age: "5さい〜" },
-  { id: "kana", icon: "🔤", name: "あいうえお", tip: "あいうえお の じゅんに",        age: "6さい〜" },
+  { id: "kana", icon: "🔤", name: "あいうえお", tip: "50音の つづきの ぶんを じゅんに", age: "5さい〜" },
 ];
 
 /* ハンデの はば。ここを こえて むずかしく／やさしく することは できない */
 const TILES = { min: 3, max: 16 };
 const PEEK = { min: 1, max: 9, step: 0.5 };  // びょう
 const WLEN = { min: 2, max: 5 };             // ことばの もじすう
+const LIVES = { min: 0, max: 5 };            // まちがえて いい かず
 
-/* レベルは はやわざ。おすと したの 3つが まとめて かわる。
+/* レベルは はやわざ。おすと したの 4つが まとめて かわる。
    そのあと ➖➕ で 1つずつ こまかく かえられる */
 const LEVELS = [
-  { tiles: 4,  peek: 5.0, wlen: 2 },
-  { tiles: 6,  peek: 4.5, wlen: 3 },
-  { tiles: 8,  peek: 4.0, wlen: 3 },
-  { tiles: 10, peek: 3.5, wlen: 4 },
-  { tiles: 12, peek: 3.0, wlen: 4 },
-  { tiles: 14, peek: 2.5, wlen: 5 },
+  { tiles: 4,  peek: 5.0, lives: 2, wlen: 2 },
+  { tiles: 6,  peek: 4.5, lives: 1, wlen: 3 },
+  { tiles: 8,  peek: 4.0, lives: 1, wlen: 3 },
+  { tiles: 10, peek: 3.5, lives: 0, wlen: 4 },
+  { tiles: 12, peek: 3.0, lives: 0, wlen: 4 },
+  { tiles: 14, peek: 2.5, lives: 0, wlen: 5 },
 ];
 
 /* ばんの たかさ。よこはばを 1 としたときの ひりつ */
@@ -103,8 +104,9 @@ const SIZES = [
 ];
 const sizeFor = (n) => (SIZES.find((s) => n <= s.max) || SIZES[SIZES.length - 1]).d;
 
-/* たすけの つよさは たまの かずで きまる。すくないほど やさしくする */
-const helpFor = (n) => ({ lives: n <= 4 ? 2 : n <= 8 ? 1 : 0, showNext: n <= 6 });
+/* たまが すくないうちは「つぎに おす もの」を おしえる。
+   まちがえて いい かずは ひとりずつ えらべるので、ここでは きめない */
+const showNextFor = (n) => n <= 6;
 
 /* すきな かおを えらべる */
 const AVATARS = [
@@ -119,10 +121,10 @@ const PLAYER_MAX = 4;
 /* さいしょの 4にん。レベルは バラして おいて、
    「こども と おとな」が すぐ 成り立つ ようにしておく */
 const DEFAULT_PLAYERS = [
-  { av: "🧒", name: "", tiles: 4,  peek: 5.0, wlen: 2, rev: false },
-  { av: "🧑", name: "", tiles: 10, peek: 3.5, wlen: 4, rev: false },
-  { av: "🐱", name: "", tiles: 6,  peek: 4.5, wlen: 3, rev: false },
-  { av: "🦊", name: "", tiles: 8,  peek: 4.0, wlen: 3, rev: false },
+  { av: "🧒", name: "", tiles: 4,  peek: 5.0, lives: 2, wlen: 2, rev: false },
+  { av: "🧑", name: "", tiles: 10, peek: 3.5, lives: 0, wlen: 4, rev: false },
+  { av: "🐱", name: "", tiles: 6,  peek: 4.5, lives: 1, wlen: 3, rev: false },
+  { av: "🦊", name: "", tiles: 8,  peek: 4.0, lives: 1, wlen: 3, rev: false },
 ];
 const emptyScores = () => DEFAULT_PLAYERS.map(() => []);
 
@@ -245,9 +247,11 @@ function buildRound(mode, p) {
   if (mode === "num") {
     seq = range(n).map((i) => String(i + 1));
   } else if (mode === "kana") {
-    /* かずが すくないうちは「あ」に ちかい もじだけ。ならびを おもいだしやすい */
-    const pool = [...GOJUON.slice(0, clamp(n * 4, 16, GOJUON.length))];
-    seq = shuffle(pool).slice(0, n).sort((a, b) => GOJUON.indexOf(a) - GOJUON.indexOf(b));
+    /* 50音の どこかから、とぎれずに n もじ（きくけこさし… のように）。
+       50音ぜんたいから とびとびに えらぶと、あいだが あいて
+       じゅんばんを おもいだせず、こどもには むずかしすぎた */
+    const start = Math.floor(Math.random() * Math.max(1, GOJUON.length - n + 1));
+    seq = [...GOJUON.slice(start, start + n)];
   } else {
     word = pick(WORDS.filter((w) => w.k.length === p.wlen));
     seq = [...word.k];
@@ -311,7 +315,7 @@ export default function KiokuGame() {
   const pIdx = turn % count;
   const me = players[pIdx];
   const myTiles = tilesOf(me, mode);
-  const help = helpFor(myTiles);
+  const showNext = showNextFor(myTiles);
   const roundNo = Math.floor(turn / count);
   const modeInfo = MODES.find((m) => m.id === mode);
 
@@ -339,6 +343,7 @@ export default function KiokuGame() {
               /* 0.5 きざみに そろえてから はんいに いれる */
               peek: clamp(r1(Math.round(safeNum(s.peek, PEEK.min, PEEK.max, p.peek) * 2) / 2),
                           PEEK.min, PEEK.max),
+              lives: Math.floor(safeNum(s.lives, LIVES.min, LIVES.max, p.lives)),
               wlen: Math.floor(safeNum(s.wlen, WLEN.min, WLEN.max, p.wlen)),
               rev: typeof s.rev === "boolean" ? s.rev : p.rev,
             };
@@ -391,7 +396,7 @@ export default function KiokuGame() {
       const p = players[t % count];
       setBoard(buildRound(mode, p));
       setStep(0);
-      setLives(helpFor(tilesOf(p, mode)).lives);
+      setLives(p.lives);
       setWrongId(0);
       setPhase("peek");
     },
@@ -669,7 +674,7 @@ export default function KiokuGame() {
             {me.rev && "　／　🔁 ぎゃくから"}
           </p>
           <p style={{ fontSize: 13, opacity: 0.65, margin: "0 0 22px" }}>
-            {help.lives > 0 ? `${help.lives}かいまで まちがえて いい` : "1かい まちがえたら おわり"}
+            {me.lives > 0 ? `${me.lives}かいまで まちがえて いい` : "1かい まちがえたら おわり"}
           </p>
           <button className="bigbtn" onClick={() => { blip(720, 0.14); startTurn(turn); }}
             style={{ width: "100%", padding: "20px 8px", fontSize: 21, borderRadius: 18,
@@ -683,7 +688,7 @@ export default function KiokuGame() {
       {(phase === "peek" || phase === "play" || phase === "round") && board && (
         <div style={{ padding: 10, maxWidth: 460, margin: "0 auto" }}>
           <Prompt phase={phase} mode={mode} board={board} step={step}
-                  showNext={help.showNext} rev={me.rev} />
+                  showNext={showNext} rev={me.rev} />
 
           {phase === "peek" && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 8px" }}>
@@ -699,7 +704,7 @@ export default function KiokuGame() {
             </div>
           )}
 
-          {phase === "play" && help.lives > 0 && (
+          {phase === "play" && me.lives > 0 && (
             <p style={{ ...hint, margin: "0 0 8px" }}>
               まちがえて いい かず {lives > 0 ? "❤️".repeat(lives) : "（あと なし）"}
             </p>
@@ -811,10 +816,11 @@ export default function KiokuGame() {
    ハンデは レベルで だいたい あわせて、➖➕ で こまかく なおす */
 function PlayerSetup({ p, no, mode, blip, onFace, onName, onSet }) {
   const tiles = tilesOf(p, mode);
-  const help = helpFor(tiles);
+  const showNext = showNextFor(tiles);
   /* いまの せっていが どの レベルと おなじか。ちがえば「じぶんで せってい」 */
   const lv = LEVELS.findIndex(
-    (L) => L.tiles === p.tiles && L.peek === p.peek && (mode !== "word" || L.wlen === p.wlen)
+    (L) => L.tiles === p.tiles && L.peek === p.peek && L.lives === p.lives
+      && (mode !== "word" || L.wlen === p.wlen)
   );
 
   const setTiles = (v) => {
@@ -824,6 +830,10 @@ function PlayerSetup({ p, no, mode, blip, onFace, onName, onSet }) {
   const setPeek = (v) => {
     blip(640, 0.1);
     onSet({ peek: clamp(r1(v), PEEK.min, PEEK.max) });
+  };
+  const setLives = (v) => {
+    blip(520 + v * 40, 0.1);
+    onSet({ lives: clamp(v, LIVES.min, LIVES.max) });
   };
   /* ことばを ながくすると、たまが たりなくなることが ある。いっしょに ふやす */
   const setWlen = (v) => {
@@ -867,8 +877,7 @@ function PlayerSetup({ p, no, mode, blip, onFace, onName, onSet }) {
           {lv >= 0 ? `レベル ${lv + 1}` : "じぶんで せってい"}
         </div>
         <div style={{ fontSize: 12, opacity: 0.75 }}>
-          {help.lives > 0 ? `ミス ${help.lives}かい OK` : "ミスしたら おわり"}
-          {help.showNext && "／つぎを おしえる"}
+          {showNext ? "つぎに おす ものを おしえる" : "つぎは じぶんで おもいだす"}
         </div>
       </div>
 
@@ -894,6 +903,10 @@ function PlayerSetup({ p, no, mode, blip, onFace, onName, onSet }) {
         <Stepper name="みる じかん" text={`${r1(p.peek)} びょう`}
           dec={() => setPeek(p.peek - PEEK.step)} inc={() => setPeek(p.peek + PEEK.step)}
           canDec={p.peek > PEEK.min} canInc={p.peek < PEEK.max} />
+        <Stepper name="まちがえて いい かず"
+          text={p.lives > 0 ? `${p.lives} かい` : "なし"}
+          dec={() => setLives(p.lives - 1)} inc={() => setLives(p.lives + 1)}
+          canDec={p.lives > LIVES.min} canInc={p.lives < LIVES.max} />
         {mode === "word" && (
           <Stepper name="ことばの ながさ" text={`${p.wlen} もじ`}
             dec={() => setWlen(p.wlen - 1)} inc={() => setWlen(p.wlen + 1)}
