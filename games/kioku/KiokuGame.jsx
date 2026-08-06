@@ -106,10 +106,69 @@ const sizeFor = (n) => (SIZES.find((s) => n <= s.max) || SIZES[SIZES.length - 1]
 /* たすけの つよさは たまの かずで きまる。すくないほど やさしくする */
 const helpFor = (n) => ({ lives: n <= 4 ? 2 : n <= 8 ? 1 : 0, showNext: n <= 6 });
 
-/* すきな かおを えらべる。なまえは きかない（にゅうりょく欄を つくらない） */
-const AVATARS = ["🧒", "🧑", "👦", "👧", "👨", "👩", "🐱", "🐶", "🦊", "🐼", "🐸", "🐧"];
+/* すきな かおを えらべる */
+const AVATARS = [
+  "🧒", "🧑", "👦", "👧", "👨", "👩", "👴", "👵",
+  "🐱", "🐶", "🦊", "🐼", "🐸", "🐧", "🐰", "🐻",
+  "🦁", "🐯", "🐷", "🐮", "🐵", "🐨", "🦄", "🐙",
+];
 
 const ROUND_CHOICES = [1, 3, 5];
+const PLAYER_MAX = 4;
+
+/* さいしょの 4にん。レベルは バラして おいて、
+   「こども と おとな」が すぐ 成り立つ ようにしておく */
+const DEFAULT_PLAYERS = [
+  { av: "🧒", name: "", tiles: 4,  peek: 5.0, wlen: 2, rev: false },
+  { av: "🧑", name: "", tiles: 10, peek: 3.5, wlen: 4, rev: false },
+  { av: "🐱", name: "", tiles: 6,  peek: 4.5, wlen: 3, rev: false },
+  { av: "🦊", name: "", tiles: 8,  peek: 4.0, wlen: 3, rev: false },
+];
+const emptyScores = () => DEFAULT_PLAYERS.map(() => []);
+
+/* ---- なまえ ----
+   にゅうりょく欄（<input>）は つかわない。ゲームの中に ひらがなの ボタンを
+   ならべて、タップで 1もじずつ つくる。こうすると
+   ・端末の キーボードが 出てこない（ひらがなが よめれば こどもだけで つけられる）
+   ・ひらがな 以外は そもそも 入らない
+   なまえは 端末の中（localStorage）だけに のこる。CSP で 外には 出ない */
+const NAME_MAX = 6;
+const KANA_KEYS = [
+  "あ", "い", "う", "え", "お",
+  "か", "き", "く", "け", "こ",
+  "さ", "し", "す", "せ", "そ",
+  "た", "ち", "つ", "て", "と",
+  "な", "に", "ぬ", "ね", "の",
+  "は", "ひ", "ふ", "へ", "ほ",
+  "ま", "み", "む", "め", "も",
+  "や", "",   "ゆ", "",   "よ",
+  "ら", "り", "る", "れ", "ろ",
+  "わ", "を", "ん", "ー", "",
+];
+const DAKU = {
+  か: "が", き: "ぎ", く: "ぐ", け: "げ", こ: "ご", さ: "ざ", し: "じ", す: "ず",
+  せ: "ぜ", そ: "ぞ", た: "だ", ち: "ぢ", つ: "づ", て: "で", と: "ど",
+  は: "ば", ひ: "び", ふ: "ぶ", へ: "べ", ほ: "ぼ", う: "ゔ",
+};
+const HANDAKU = { は: "ぱ", ひ: "ぴ", ふ: "ぷ", へ: "ぺ", ほ: "ぽ" };
+const SMALL = {
+  あ: "ぁ", い: "ぃ", う: "ぅ", え: "ぇ", お: "ぉ",
+  や: "ゃ", ゆ: "ゅ", よ: "ょ", つ: "っ", わ: "ゎ",
+};
+/* なまえに つかってよい もじ。セーブを かきかえられても これ以外は うけとらない */
+const NAME_OK = new Set([
+  ...KANA_KEYS.filter(Boolean),
+  ...Object.values(DAKU), ...Object.values(HANDAKU), ...Object.values(SMALL),
+]);
+
+/* さいごの もじに てんてん（や ちいさい字）を つける。もう ついていたら はずす */
+const applyMark = (s, map) => {
+  if (!s) return s;
+  const last = s.slice(-1);
+  const back = Object.entries(map).find(([, v]) => v === last);
+  const next = map[last] || (back && back[0]);
+  return next ? s.slice(0, -1) + next : s;
+};
 
 /* ================= ちいさい どうぐ ================= */
 
@@ -165,6 +224,9 @@ const C = { ...THEME, teal: "#0f9b8e", deep: "#0b7a70", board: "#effaf9" };
 /* ことばモードでは、たまの かずは ことばの ながさ いじょう ひつよう */
 const tilesOf = (p, mode) => (mode === "word" ? Math.max(p.tiles, p.wlen) : p.tiles);
 
+/* だれの ことか。なまえを つけていなければ かおだけ */
+const who = (p) => (p.name ? `${p.av} ${p.name}` : p.av);
+
 /* ================= もんだいを つくる ================= */
 
 /* かえすもの:
@@ -218,13 +280,10 @@ function buildRound(mode, p) {
 export default function KiokuGame() {
   /* せってい */
   const [sound, setSound] = useState(true);
-  const [solo, setSolo] = useState(false);
+  const [count, setCount] = useState(2);          // あそぶ にんずう 1〜4
   const [mode, setMode] = useState("num");
   const [rounds, setRounds] = useState(3);
-  const [players, setPlayers] = useState([
-    { av: "🧒", tiles: 4,  peek: 5.0, wlen: 2, rev: false },
-    { av: "🧑", tiles: 10, peek: 3.5, wlen: 4, rev: false },
-  ]);
+  const [players, setPlayers] = useState(DEFAULT_PLAYERS);
   const [best, setBest] = useState({ num: 0, word: 0, kana: 0 });
 
   /* しんこう */
@@ -235,8 +294,9 @@ export default function KiokuGame() {
   const [lives, setLives] = useState(0);
   const [wrongId, setWrongId] = useState(0);
   const [left, setLeft] = useState(0);
-  const [scores, setScores] = useState([[], []]);
-  const [ask, setAsk] = useState(null); // "quit" | "clear"
+  const [scores, setScores] = useState(emptyScores);
+  const [ask, setAsk] = useState(null);   // "quit" | "clear"
+  const [editing, setEditing] = useState(null); // { i, kind:"face"|"name" }
 
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -248,12 +308,11 @@ export default function KiokuGame() {
     return () => { aliveRef.current = false; };
   }, []);
 
-  const np = solo ? 1 : 2;
-  const pIdx = turn % np;
+  const pIdx = turn % count;
   const me = players[pIdx];
   const myTiles = tilesOf(me, mode);
   const help = helpFor(myTiles);
-  const roundNo = Math.floor(turn / np);
+  const roundNo = Math.floor(turn / count);
   const modeInfo = MODES.find((m) => m.id === mode);
 
   /* ---------- セーブの よみこみ ----------
@@ -262,16 +321,20 @@ export default function KiokuGame() {
     const d = save.load();
     if (d) {
       if (typeof d.sound === "boolean") setSound(d.sound);
-      if (typeof d.solo === "boolean") setSolo(d.solo);
+      if (Number.isFinite(d.count)) setCount(clamp(Math.floor(d.count), 1, PLAYER_MAX));
+      else if (d.solo === true) setCount(1);       // むかしの かたちの セーブ
       if (MODES.some((m) => m.id === d.mode)) setMode(d.mode);
       if (ROUND_CHOICES.includes(d.rounds)) setRounds(d.rounds);
-      if (Array.isArray(d.p) && d.p.length === 2) {
+      if (Array.isArray(d.p)) {
         setPlayers((ps) =>
           ps.map((p, i) => {
             const s = d.p[i];
             if (!s || typeof s !== "object") return p;
             return {
               av: AVATARS.includes(s.av) ? s.av : p.av,
+              /* なまえは ひらがな だけ。それ以外の もじが 1つでも あれば すてる */
+              name: typeof s.name === "string" && s.name.length <= NAME_MAX
+                && [...s.name].every((c) => NAME_OK.has(c)) ? s.name : "",
               tiles: Math.floor(safeNum(s.tiles, TILES.min, TILES.max, p.tiles)),
               /* 0.5 きざみに そろえてから はんいに いれる */
               peek: clamp(r1(Math.round(safeNum(s.peek, PEEK.min, PEEK.max, p.peek) * 2) / 2),
@@ -298,11 +361,11 @@ export default function KiokuGame() {
   const bSig = JSON.stringify(best);
   useEffect(() => {
     if (!loaded || !save.available) return;
-    save.save({ sound, solo, mode, rounds, p: players, best });
+    save.save({ sound, count, mode, rounds, p: players, best });
     setSaving(true);
     const t = setTimeout(() => { if (aliveRef.current) setSaving(false); }, 500);
     return () => clearTimeout(t);
-  }, [loaded, sound, solo, mode, rounds, pSig, bSig]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loaded, sound, count, mode, rounds, pSig, bSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---------- みる じかん ---------- */
   useEffect(() => {
@@ -325,19 +388,19 @@ export default function KiokuGame() {
   /* ---------- ばんを はじめる ---------- */
   const startTurn = useCallback(
     (t) => {
-      const p = players[t % np];
+      const p = players[t % count];
       setBoard(buildRound(mode, p));
       setStep(0);
       setLives(helpFor(tilesOf(p, mode)).lives);
       setWrongId(0);
       setPhase("peek");
     },
-    [players, np, mode]
+    [players, count, mode]
   );
 
   const startMatch = () => {
     blip(760, 0.14);
-    setScores([[], []]);
+    setScores(emptyScores());
     setTurn(0);
     setPhase("ready");
   };
@@ -384,8 +447,8 @@ export default function KiokuGame() {
   /* ---------- つぎへ ---------- */
   const nextTurn = () => {
     const t = turn + 1;
-    if (t >= rounds * np) {
-      if (solo) {
+    if (t >= rounds * count) {
+      if (count === 1) {
         const avg = Math.round(scores[0].reduce((s, x) => s + x, 0) / rounds);
         if (avg > best[mode]) setBest((b) => ({ ...b, [mode]: avg }));
       }
@@ -421,24 +484,18 @@ export default function KiokuGame() {
       <style>{`
         @keyframes pop { 0%{ transform:scale(.4) } 70%{ transform:scale(1.14) } 100%{ transform:scale(1) } }
         @keyframes bob { 0%,100%{ transform:translateY(0) } 50%{ transform:translateY(-5px) } }
-        /* たまは まんなかを ばしょに あわせている（translate -50%）。
-           アニメでも その ずらしを けさない ように、まいかい 書いておく */
-        @keyframes tamapop {
-          0%{ transform:translate(-50%,-50%) scale(.45) }
-          70%{ transform:translate(-50%,-50%) scale(1.13) }
-          100%{ transform:translate(-50%,-50%) scale(1) }
-        }
-        @keyframes tamawob {
-          0%,100%{ transform:translate(-50%,-50%) rotate(-8deg) }
-          50%{ transform:translate(-50%,-50%) rotate(8deg) }
-        }
+        @keyframes wob { 0%,100%{ transform:rotate(-8deg) } 50%{ transform:rotate(8deg) } }
         .homelink { text-decoration:none; }
         .bigbtn { border:none; cursor:pointer; font-family:inherit; font-weight:800;
                   -webkit-tap-highlight-color:transparent; }
         .bigbtn:active { transform: translateY(3px); }
         .bigbtn:disabled { cursor:default; transform:none; }
-        /* たまは ばしょが ずれると こまるので :active で うごかさない */
-        .tama { border:none; padding:0; cursor:pointer; font-family:inherit; font-weight:900;
+        /* たまは ばしょが ずれると こまるので :active で うごかさない。
+           おおきさは px で きめる（％と border の くみあわせは
+           ブラウザによって たてよこが そろわない） */
+        .tama { border:none; padding:0; margin:0; cursor:pointer; font-family:inherit;
+                font-weight:900; box-sizing:border-box; display:flex;
+                align-items:center; justify-content:center; line-height:1; text-align:center;
                 -webkit-tap-highlight-color:transparent; }
         .tama:active { filter: brightness(1.12); }
         .tama:disabled { cursor:default; }
@@ -451,20 +508,6 @@ export default function KiokuGame() {
         <a className="homelink" href="../../" aria-label="ゲームをえらぶ"
            style={{ fontSize: 20, padding: "2px 4px" }}>🏠</a>
         <b style={{ fontSize: 16 }}>🧠 きおくバトル</b>
-        {phase !== "home" && (
-          <div style={{ display: "flex", gap: 6, marginLeft: 4 }}>
-            {range(np).map((i) => (
-              <span key={i} style={{
-                display: "flex", alignItems: "center", gap: 4, background: "#fff",
-                borderRadius: 999, padding: "3px 10px",
-                border: `2px solid ${i === pIdx && phase !== "final" ? C.coral : C.gold}`,
-              }}>
-                <span style={{ fontSize: 16 }}>{players[i].av}</span>
-                <b style={{ fontSize: 15 }}>{totals[i]}</b>
-              </span>
-            ))}
-          </div>
-        )}
         <span style={{ marginLeft: "auto", fontSize: 16, opacity: saving ? 1 : 0.15,
                        transition: "opacity .3s" }} title="セーブちゅう">💾</span>
         <button className="bigbtn" onClick={() => setSound((s) => !s)} aria-label="おと"
@@ -479,6 +522,33 @@ export default function KiokuGame() {
         )}
       </div>
 
+      {/* ===== とくてん（あそんでいる あいだ ずっと 出す） ===== */}
+      {phase !== "home" && (
+        <div style={{ display: "flex", gap: 5, padding: "7px 8px", background: "#fff",
+                      borderBottom: `3px solid ${C.gold}` }}>
+          {range(count).map((i) => {
+            const on = i === pIdx && phase !== "final";
+            return (
+              <div key={i} style={{
+                flex: "1 1 0", minWidth: 0, textAlign: "center", borderRadius: 13,
+                padding: "4px 2px", background: on ? "#fff2e6" : "#f6f9fa",
+                border: `2px solid ${on ? C.coral : "#e3ecf0"}`,
+              }}>
+                <div style={{ fontSize: 19, lineHeight: 1.15 }}>{players[i].av}</div>
+                {players[i].name && (
+                  <div style={{ fontSize: 10, fontWeight: 800, lineHeight: 1.2,
+                                overflow: "hidden", textOverflow: "ellipsis",
+                                whiteSpace: "nowrap" }}>
+                    {players[i].name}
+                  </div>
+                )}
+                <b style={{ fontSize: 15 }}>{totals[i]}</b>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* ===== したく ===== */}
       {phase === "home" && (
         <div style={{ padding: 10, maxWidth: 460, margin: "0 auto" }}>
@@ -487,16 +557,23 @@ export default function KiokuGame() {
           <div style={card}>
             <p style={label}>なんにんで あそぶ？</p>
             <div style={{ display: "flex", gap: 8 }}>
-              {[[true, "🧒 ひとり"], [false, "🧒🧑 ふたりで しょうぶ"]].map(([v, t]) => (
-                <button key={String(v)} className="bigbtn"
-                  onClick={() => { blip(680, 0.1); setSolo(v); }}
-                  style={{ flex: 1, padding: "13px 4px", fontSize: 15, borderRadius: 14,
-                           background: solo === v ? C.teal : "#eef6f5",
-                           color: solo === v ? "#fff" : C.ink,
-                           boxShadow: `0 4px 0 ${solo === v ? C.deep : "#d5e5e3"}` }}>
-                  {t}
-                </button>
-              ))}
+              {range(PLAYER_MAX).map((i) => {
+                const n = i + 1;
+                return (
+                  <button key={n} className="bigbtn"
+                    onClick={() => { blip(650 + n * 30, 0.1); setCount(n); }}
+                    style={{ flex: 1, padding: "11px 2px", fontSize: 15, borderRadius: 14,
+                             background: count === n ? C.teal : "#eef6f5",
+                             color: count === n ? "#fff" : C.ink,
+                             boxShadow: `0 4px 0 ${count === n ? C.deep : "#d5e5e3"}` }}>
+                    <div style={{ fontSize: 15, lineHeight: 1.3, whiteSpace: "nowrap",
+                                  overflow: "hidden" }}>
+                      {players.slice(0, n).map((p) => p.av).join("")}
+                    </div>
+                    {n === 1 ? "ひとり" : `${n}にん`}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -538,15 +615,10 @@ export default function KiokuGame() {
             </div>
           </div>
 
-          {range(np).map((i) => (
-            <PlayerSetup key={i} p={players[i]} mode={mode} blip={blip}
-              onAvatar={() => {
-                blip(820, 0.1);
-                const other = players[1 - i]?.av;
-                let n = AVATARS.indexOf(players[i].av);
-                do { n = (n + 1) % AVATARS.length; } while (!solo && AVATARS[n] === other);
-                setP(i, { av: AVATARS[n] });
-              }}
+          {range(count).map((i) => (
+            <PlayerSetup key={i} p={players[i]} no={i + 1} mode={mode} blip={blip}
+              onFace={() => { blip(820, 0.1); setEditing({ i, kind: "face" }); }}
+              onName={() => { blip(760, 0.1); setEditing({ i, kind: "name" }); }}
               onSet={(patch) => setP(i, patch)} />
           ))}
 
@@ -589,7 +661,7 @@ export default function KiokuGame() {
             {me.av}
           </div>
           <p style={{ fontSize: 22, fontWeight: 900, margin: "8px 0 2px" }}>
-            {solo ? "じゅんび はいい？" : `${me.av} の ばん！`}
+            {count === 1 ? "じゅんび はいい？" : `${who(me)} の ばん！`}
           </p>
           <p style={{ fontSize: 14, opacity: 0.8, margin: "0 0 4px" }}>
             {modeInfo.icon} {modeInfo.name}　／　{myTiles}こ　／　{r1(me.peek)}びょう
@@ -663,9 +735,11 @@ export default function KiokuGame() {
               <button className="bigbtn" onClick={() => { blip(700, 0.12); nextTurn(); }}
                 style={{ width: "100%", padding: "16px 8px", fontSize: 19, borderRadius: 16,
                          background: C.coral, color: "#fff", boxShadow: "0 5px 0 #c9522a" }}>
-                {turn + 1 >= rounds * np
+                {turn + 1 >= rounds * count
                   ? "けっかを みる ▶"
-                  : solo ? "つぎの もんだい ▶" : `つぎは ${players[(turn + 1) % np].av} ▶`}
+                  : count === 1
+                    ? "つぎの もんだい ▶"
+                    : `つぎは ${who(players[(turn + 1) % count])} ▶`}
               </button>
             </div>
           )}
@@ -674,10 +748,25 @@ export default function KiokuGame() {
 
       {/* ===== けっか ===== */}
       {phase === "final" && (
-        <Final solo={solo} players={players} scores={scores} totals={totals}
+        <Final count={count} players={players} scores={scores} totals={totals}
           rounds={rounds} best={best[mode]}
-          onAgain={() => { blip(780, 0.14); setScores([[], []]); setTurn(0); setPhase("ready"); }}
+          onAgain={() => { blip(780, 0.14); setScores(emptyScores()); setTurn(0); setPhase("ready"); }}
           onHome={backHome} />
+      )}
+
+      {/* ===== かおを えらぶ / なまえを つける ===== */}
+      {editing?.kind === "face" && (
+        <FacePicker
+          now={players[editing.i].av}
+          taken={players.slice(0, count).filter((_, j) => j !== editing.i).map((p) => p.av)}
+          onPick={(av) => { blip(880, 0.1); setP(editing.i, { av }); setEditing(null); }}
+          onClose={() => { blip(520, 0.1); setEditing(null); }} />
+      )}
+      {editing?.kind === "name" && (
+        <NameEditor
+          now={players[editing.i].name} blip={blip}
+          onDone={(name) => { setP(editing.i, { name }); setEditing(null); }}
+          onClose={() => { blip(520, 0.1); setEditing(null); }} />
       )}
 
       {/* ===== かくにん ===== */}
@@ -718,8 +807,9 @@ export default function KiokuGame() {
 
 /* ================= ぶひん ================= */
 
-/* ひとりぶんの ハンデ。レベルで だいたい あわせて、➖➕ で こまかく なおす */
-function PlayerSetup({ p, mode, blip, onAvatar, onSet }) {
+/* ひとりぶんの したく。かお・なまえと、ハンデ。
+   ハンデは レベルで だいたい あわせて、➖➕ で こまかく なおす */
+function PlayerSetup({ p, no, mode, blip, onFace, onName, onSet }) {
   const tiles = tilesOf(p, mode);
   const help = helpFor(tiles);
   /* いまの せっていが どの レベルと おなじか。ちがえば「じぶんで せってい」 */
@@ -745,28 +835,41 @@ function PlayerSetup({ p, mode, blip, onAvatar, onSet }) {
   return (
     <div style={{ background: "#fff", borderRadius: 20, border: `4px solid ${C.teal}`,
                   boxShadow: "0 4px 0 #cfe8e5", padding: 12, marginBottom: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-        <button className="bigbtn" onClick={onAvatar} aria-label="かおを かえる"
+      {/* かお と なまえ。どちらも おすと えらぶ がめんが でる */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <button className="bigbtn" onClick={onFace} aria-label={`${no}にんめの かおを えらぶ`}
           style={{ background: "#eef6f5", borderRadius: 16, fontSize: 34, lineHeight: 1,
-                   padding: "6px 10px" }}>
+                   padding: "6px 10px", boxShadow: "0 4px 0 #d5e5e3" }}>
           {p.av}
         </button>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 900 }}>
-            {lv >= 0 ? `レベル ${lv + 1}` : "じぶんで せってい"}
-          </div>
-          <div style={{ fontSize: 12, opacity: 0.75 }}>
-            {help.lives > 0 ? `ミス ${help.lives}かい OK` : "ミスしたら おわり"}
-            {help.showNext && "／つぎを おしえる"}
-          </div>
-        </div>
+        <button className="bigbtn" onClick={onName} aria-label={`${no}にんめの なまえを つける`}
+          style={{ flex: 1, minWidth: 0, textAlign: "left", borderRadius: 16,
+                   padding: "10px 12px", background: "#eef6f5",
+                   boxShadow: "0 4px 0 #d5e5e3" }}>
+          <span style={{ fontSize: 11, opacity: 0.7, display: "block" }}>なまえ</span>
+          <span style={{ fontSize: p.name ? 19 : 14, color: p.name ? C.ink : "#8aa6b8",
+                         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                         display: "block" }}>
+            {p.name || "つけてみる ✏️"}
+          </span>
+        </button>
         <button className="bigbtn" onClick={() => { blip(500, 0.1); onSet({ rev: !p.rev }); }}
-          style={{ padding: "11px 10px", fontSize: 13, borderRadius: 14,
+          style={{ padding: "11px 8px", fontSize: 12, borderRadius: 14,
                    background: p.rev ? C.coral : "#eef6f5",
                    color: p.rev ? "#fff" : C.ink,
                    boxShadow: `0 4px 0 ${p.rev ? "#c9522a" : "#d5e5e3"}` }}>
-          🔁 ぎゃく
+          🔁<br />ぎゃく
         </button>
+      </div>
+
+      <div style={{ marginBottom: 6 }}>
+        <div style={{ fontSize: 15, fontWeight: 900 }}>
+          {lv >= 0 ? `レベル ${lv + 1}` : "じぶんで せってい"}
+        </div>
+        <div style={{ fontSize: 12, opacity: 0.75 }}>
+          {help.lives > 0 ? `ミス ${help.lives}かい OK` : "ミスしたら おわり"}
+          {help.showNext && "／つぎを おしえる"}
+        </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${LEVELS.length},1fr)`, gap: 5 }}>
@@ -798,6 +901,122 @@ function PlayerSetup({ p, mode, blip, onAvatar, onSet }) {
         )}
       </div>
     </div>
+  );
+}
+
+/* かおを えらぶ。ほかの ひとが つかっている かおは えらべない */
+function FacePicker({ now, taken, onPick, onClose }) {
+  return (
+    <Overlay wide onBackdrop={onClose}>
+      <p style={{ fontSize: 18, fontWeight: 900, margin: "0 0 12px" }}>かおを えらぼう</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 6 }}>
+        {AVATARS.map((av) => {
+          const used = taken.includes(av);
+          const on = av === now;
+          return (
+            <button key={av} className="bigbtn" disabled={used} onClick={() => onPick(av)}
+              aria-label={used ? `${av} つかわれている` : av}
+              style={{ height: 50, fontSize: 27, borderRadius: 14, padding: 0,
+                       background: on ? C.teal : used ? "#f0f3f5" : "#fff",
+                       opacity: used ? 0.3 : 1,
+                       border: `3px solid ${on ? C.deep : "#e3ecf0"}` }}>
+              {av}
+            </button>
+          );
+        })}
+      </div>
+      <button className="bigbtn" onClick={onClose}
+        style={{ width: "100%", marginTop: 14, padding: "14px 8px", fontSize: 17,
+                 borderRadius: 16, background: "#fff", color: C.ink,
+                 boxShadow: "0 5px 0 #d8e3ea" }}>
+        とじる
+      </button>
+    </Overlay>
+  );
+}
+
+/* なまえを つける。
+   <input> は つかわず、ひらがなの ボタンを ならべて 1もじずつ つくる。
+   端末の キーボードが 出てこないので、ひらがなが よめれば
+   こどもだけでも つけられる。ひらがな 以外は そもそも 入らない */
+function NameEditor({ now, blip, onDone, onClose }) {
+  const [text, setText] = useState(now || "");
+  const full = text.length >= NAME_MAX;
+
+  const put = (c) => {
+    if (full) { blip(200, 0.1); return; }
+    blip(700 + text.length * 30, 0.09);
+    setText(text + c);
+  };
+  const mark = (map) => { blip(620, 0.09); setText(applyMark(text, map)); };
+  const back = () => { blip(320, 0.1); setText(text.slice(0, -1)); };
+
+  const key = (extra = {}) => ({
+    height: 44, fontSize: 20, borderRadius: 11, padding: 0,
+    background: "#eef6f5", color: C.ink, boxShadow: "0 3px 0 #d5e5e3", ...extra,
+  });
+
+  return (
+    <Overlay wide onBackdrop={onClose}>
+      <p style={{ fontSize: 17, fontWeight: 900, margin: "0 0 8px" }}>なまえを つけよう</p>
+
+      {/* いま つくっている なまえ */}
+      <div style={{ minHeight: 52, display: "flex", alignItems: "center",
+                    justifyContent: "center", gap: 4, background: "#fff",
+                    border: `3px solid ${C.gold}`, borderRadius: 14, padding: "6px 8px",
+                    marginBottom: 4 }}>
+        {text ? (
+          [...text].map((c, i) => (
+            <span key={i} style={{ fontSize: 26, fontWeight: 900 }}>{c}</span>
+          ))
+        ) : (
+          <span style={{ fontSize: 14, color: "#8aa6b8" }}>したの ひらがなを おしてね</span>
+        )}
+      </div>
+      <p style={{ fontSize: 11, opacity: 0.6, margin: "0 0 8px" }}>
+        {text.length} / {NAME_MAX} もじ
+      </p>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 5 }}>
+        {KANA_KEYS.map((c, i) =>
+          c ? (
+            <button key={i} className="bigbtn" onClick={() => put(c)} disabled={full}
+              style={key(full ? { opacity: 0.4, boxShadow: "none" } : {})}>
+              {c}
+            </button>
+          ) : (
+            <span key={i} />
+          )
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.6fr 1.2fr", gap: 5,
+                    marginTop: 6 }}>
+        <button className="bigbtn" onClick={() => mark(DAKU)} aria-label="てんてんを つける"
+          style={key()}>゛</button>
+        <button className="bigbtn" onClick={() => mark(HANDAKU)} aria-label="まるを つける"
+          style={key()}>゜</button>
+        <button className="bigbtn" onClick={() => mark(SMALL)} aria-label="ちいさく する"
+          style={key({ fontSize: 14 })}>ちいさく</button>
+        <button className="bigbtn" onClick={back} disabled={!text} aria-label="1もじ けす"
+          style={key({ fontSize: 18, background: "#ffe9e2",
+                       boxShadow: text ? "0 3px 0 #f0cabb" : "none",
+                       opacity: text ? 1 : 0.4 })}>⌫</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button className="bigbtn" onClick={onClose}
+          style={{ flex: 1, padding: "14px 8px", fontSize: 16, borderRadius: 16,
+                   background: "#fff", color: C.ink, boxShadow: "0 5px 0 #d8e3ea" }}>
+          やめる
+        </button>
+        <button className="bigbtn" onClick={() => { blip(950, 0.16); onDone(text); }}
+          style={{ flex: 2, padding: "14px 8px", fontSize: 17, borderRadius: 16,
+                   background: C.coral, color: "#fff", boxShadow: "0 5px 0 #c9522a" }}>
+          {text ? "できた！" : "なまえ なしで いい"}
+        </button>
+      </div>
+    </Overlay>
   );
 }
 
@@ -886,7 +1105,11 @@ function Board({ board, phase, step, wrongId, onTap }) {
   const ref = useRef(null);
   const [w, setW] = useState(0);
 
-  /* もじの おおきさだけは ピクセルで きめたい。ばんの よこはばを はかる */
+  /* ばんの よこはばを はかって、たまは ピクセルで おく。
+     ％ で おおきさを きめると、button の box-sizing が ブラウザで
+     ちがう（Firefox は border-box、Chrome は content-box）ため、
+     border の ぶんだけ たてよこが そろわず、たまが たまごに なって
+     もじが 中心から ずれて 見えていた。px なら どちらでも おなじ */
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -898,13 +1121,16 @@ function Board({ board, phase, step, wrongId, onTap }) {
 
   const seen = phase === "peek";
   const done = phase === "round";
-  const dp = board.d * 100;                       // たまの さしわたし（％）
-  const fs = Math.max(15, Math.round(board.d * (w || 320) * 0.44));
+  /* はかれるまでは かりの よこはばで えがく。はかるのは 絵が でる前なので
+     ちらつかないし、なにかの ひょうしに はかれなくても ばんは 出る */
+  const bw = w || 320;
+  const size = Math.round(board.d * bw);           // たまの さしわたし(px)
+  const fs = Math.max(14, Math.round(size * 0.44));
 
   return (
     <div ref={ref}
-      style={{ position: "relative", width: "100%", height: 0,
-               paddingBottom: `${BOARD_H * 100}%`, boxSizing: "border-box",
+      style={{ position: "relative", width: "100%", boxSizing: "border-box",
+               height: Math.round(bw * BOARD_H),
                borderRadius: 22, border: `4px solid ${C.teal}`, overflow: "hidden",
                background: `radial-gradient(circle at 30% 20%, #ffffff 0%, ${C.board} 55%, #dff2f0 100%)` }}>
       {board.tiles.map((t) => {
@@ -929,26 +1155,29 @@ function Board({ board, phase, step, wrongId, onTap }) {
             aria-label={show ? t.label : "まだ みえない たま"}
             style={{
               position: "absolute",
-              left: `${t.x * 100}%`,
-              top: `${(t.y / BOARD_H) * 100}%`,
-              width: `${dp}%`, height: 0, paddingBottom: `${dp}%`,
-              transform: "translate(-50%,-50%)",
+              /* まんなかを ばしょに あわせる。transform は アニメで
+                 うわがきされるので、margin で ずらす */
+              left: Math.round(t.x * bw), top: Math.round(t.y * bw),
+              marginLeft: -size / 2, marginTop: -size / 2,
+              width: size, height: size, fontSize: fs, color: fg,
               borderRadius: "50%", background: bg, border: `3px solid ${bd}`,
               boxShadow: cleared ? "0 2px 6px rgba(0,0,0,.15)" : "0 4px 8px rgba(0,0,0,.14)",
-              animation: wrong ? "tamawob .3s ease-in-out 2"
-                : cleared ? "tamapop .3s ease-out" : "none",
+              animation: wrong ? "wob .3s ease-in-out 2"
+                : cleared ? "pop .3s ease-out" : "none",
             }}>
-            <span style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-                           display: "flex", flexDirection: "column", alignItems: "center",
-                           justifyContent: "center", lineHeight: 1.05, color: fg }}>
-              {/* こたえあわせ。なんばんめだったか */}
-              {done && t.order >= 0 && (
-                <span style={{ fontSize: Math.max(10, Math.round(fs * 0.42)), color: C.coral }}>
-                  {t.order + 1}
-                </span>
-              )}
-              <span style={{ fontSize: fs }}>{show ? t.label : "?"}</span>
-            </span>
+            {show ? t.label : "?"}
+            {/* こたえあわせ。なんばんめだったかを たまの 上ふちに はりつける。
+               まん中の もじは うごかさない */}
+            {done && t.order >= 0 && (
+              <span style={{
+                position: "absolute", top: -3, left: "50%", transform: "translateX(-50%)",
+                minWidth: 20, height: 20, borderRadius: 999, padding: "0 5px",
+                boxSizing: "border-box", background: "#fff", border: `2px solid ${C.coral}`,
+                color: C.coral, fontSize: 12, lineHeight: "16px",
+              }}>
+                {t.order + 1}
+              </span>
+            )}
           </button>
         );
       })}
@@ -956,31 +1185,36 @@ function Board({ board, phase, step, wrongId, onTap }) {
   );
 }
 
-/* しょうぶの けっか */
-function Final({ solo, players, scores, totals, rounds, best, onAgain, onHome }) {
-  const np = solo ? 1 : 2;
+/* しょうぶの けっか。1〜4にん */
+function Final({ count, players, scores, totals, rounds, best, onAgain, onHome }) {
   const perfect = scores.map((a) => a.filter((x) => x === 100).length);
-  /* おなじ てんなら、パーフェクトの おおいほうが かち。それも おなじなら ひきわけ */
-  let win = -1;
-  if (!solo) {
-    if (totals[0] !== totals[1]) win = totals[0] > totals[1] ? 0 : 1;
-    else if (perfect[0] !== perfect[1]) win = perfect[0] > perfect[1] ? 0 : 1;
+  /* いちばん てんの おおい ひと。おなじなら パーフェクトの おおいほう。
+     それも おなじなら ぜんいん ひきわけ */
+  let win = [];
+  if (count > 1) {
+    const top = Math.max(...range(count).map((i) => totals[i]));
+    win = range(count).filter((i) => totals[i] === top);
+    if (win.length > 1) {
+      const topP = Math.max(...win.map((i) => perfect[i]));
+      win = win.filter((i) => perfect[i] === topP);
+    }
   }
   const avg = Math.round(totals[0] / rounds);
+  const anyPerfect = range(count).some((i) => perfect[i] > 0);
 
   return (
     <div style={{ padding: 14, maxWidth: 460, margin: "0 auto", textAlign: "center" }}>
       <div style={{ fontSize: 70, lineHeight: 1.2, animation: "pop .5s ease-out" }}>
-        {solo ? "✨" : win < 0 ? "🤝" : "🏆"}
+        {count === 1 ? "✨" : win.length === 1 ? "🏆" : "🤝"}
       </div>
       <p style={{ fontSize: 23, fontWeight: 900, margin: "6px 0 14px" }}>
-        {solo
+        {count === 1
           ? `へいきん ${avg} てん`
-          : win < 0
-            ? "ひきわけ！"
-            : `${players[win].av} の かち！`}
+          : win.length === 1
+            ? `${who(players[win[0]])} の かち！`
+            : `${win.map((i) => players[i].av).join("")} で ひきわけ！`}
       </p>
-      {solo && best > 0 && avg >= best && (
+      {count === 1 && best > 0 && avg >= best && (
         <p style={{ fontSize: 15, fontWeight: 800, color: C.coral, margin: "-8px 0 14px" }}>
           さいこうきろく こうしん！ 🎉
         </p>
@@ -988,17 +1222,26 @@ function Final({ solo, players, scores, totals, rounds, best, onAgain, onHome })
 
       <div style={{ background: "#fff", borderRadius: 20, border: `4px solid ${C.gold}`,
                     boxShadow: "0 4px 0 #e5c79a", padding: 12, marginBottom: 14 }}>
-        <div style={{ display: "grid", gap: 6,
-                      gridTemplateColumns: `56px repeat(${rounds},1fr) 60px` }}>
+        <div style={{ display: "grid", gap: 6, alignItems: "center",
+                      gridTemplateColumns: `72px repeat(${rounds},1fr) 56px` }}>
           <span />
           {range(rounds).map((r) => (
             <span key={r} style={{ fontSize: 12, opacity: 0.7 }}>{r + 1}かいめ</span>
           ))}
           <span style={{ fontSize: 12, opacity: 0.7 }}>ごうけい</span>
 
-          {range(np).map((i) => (
+          {range(count).map((i) => (
             <React.Fragment key={i}>
-              <span style={{ fontSize: 24, textAlign: "left" }}>{players[i].av}</span>
+              <span style={{ textAlign: "left", minWidth: 0 }}>
+                <span style={{ fontSize: 22 }}>{players[i].av}</span>
+                {players[i].name && (
+                  <span style={{ fontSize: 11, fontWeight: 800, display: "block",
+                                 overflow: "hidden", textOverflow: "ellipsis",
+                                 whiteSpace: "nowrap" }}>
+                    {players[i].name}
+                  </span>
+                )}
+              </span>
               {range(rounds).map((r) => (
                 <span key={r} style={{ fontSize: 16, fontWeight: 900,
                                        color: scores[i][r] === 100 ? C.coral : C.ink }}>
@@ -1009,7 +1252,7 @@ function Final({ solo, players, scores, totals, rounds, best, onAgain, onHome })
             </React.Fragment>
           ))}
         </div>
-        {(perfect[0] > 0 || perfect[1] > 0) && (
+        {anyPerfect && (
           <p style={{ fontSize: 12, opacity: 0.7, margin: "10px 0 0" }}>
             100てん（パーフェクト）は あかい すうじ
           </p>
@@ -1031,14 +1274,17 @@ function Final({ solo, players, scores, totals, rounds, best, onAgain, onHome })
   );
 }
 
-/* まんなかに だす まく */
-function Overlay({ children }) {
+/* まんなかに だす まく。せの ひくい がめんでも 中が スクロールできる */
+function Overlay({ children, wide = false, onBackdrop }) {
   return (
-    <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-                  background: "rgba(0,0,0,.6)", zIndex: 20, padding: 14,
-                  display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: C.cream, borderRadius: 24, padding: 20, width: "100%",
-                    maxWidth: 340, textAlign: "center", border: `5px solid ${C.gold}` }}>
+    <div onPointerDown={onBackdrop ? (e) => { if (e.target === e.currentTarget) onBackdrop(); } : undefined}
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+               background: "rgba(0,0,0,.6)", zIndex: 20, padding: 12,
+               display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: C.cream, borderRadius: 24, padding: wide ? 14 : 20,
+                    width: "100%", maxWidth: wide ? 400 : 340, textAlign: "center",
+                    border: `5px solid ${C.gold}`, boxSizing: "border-box",
+                    maxHeight: "94vh", overflowY: "auto" }}>
         {children}
       </div>
     </div>
