@@ -44,6 +44,22 @@ export const GAMES = [
     age: "3さい〜",
     color: "#0f9b8e",
   },
+  {
+    id: "kioku-cup",
+    title: "きおくカップ",
+    emoji: "🏅",
+    tagline: "きおくの きょうぎ 4しゅもく",
+    age: "5さい〜",
+    color: "#3b56b8",
+  },
+  {
+    id: "kazoe",
+    title: "なんこ あるかな",
+    emoji: "🔍",
+    tagline: "めあての えを じかんない に かぞえる",
+    age: "4さい〜",
+    color: "#d6337f",
+  },
 ];
 
 /* 相対リンク。どの階層に置かれても壊れない */
