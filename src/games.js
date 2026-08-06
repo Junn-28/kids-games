@@ -36,6 +36,14 @@ export const GAMES = [
     age: "5さい〜",
     color: "#4e8b3f",
   },
+  {
+    id: "kioku",
+    title: "きおくバトル",
+    emoji: "🧠",
+    tagline: "ばしょを おぼえて じゅんばんに おす",
+    age: "3さい〜",
+    color: "#0f9b8e",
+  },
 ];
 
 /* 相対リンク。どの階層に置かれても壊れない */
