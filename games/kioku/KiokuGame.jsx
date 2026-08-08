@@ -89,6 +89,111 @@ const LEVELS = [
   { tiles: 14, peek: 2.5, lives: 0, wlen: 5 },
 ];
 
+/* ================= コスト（むずかしさの ものさし） =================
+
+   ハンデの つまみ（かず・じかん・ミス・ことばの ながさ・🔁ぎゃく）を
+   ぜんぶ まとめて 1つの すうじに する。これが「むずかしさ」。
+   レベルは その すうじの めもりで、うえの LEVELS が そのまま めもりの
+   ばしょに なる（ひょうを 2つ もたなくて いい）。
+
+   やさしい ほうに つまみを うごかすと むずかしさが さがって、めもりを
+   われる。その ときは ほかの つまみが じどうで きつく なって めもりを
+   たもつ。これが コスト。
+   ＝ みる じかんを のばしたら、おぼえる かずが ふえる。
+
+   てんすうには いっさい さわらない。どの レベルでも 100てんまんの ままなので、
+   こどもと おとなが おなじ ばんで しょうぶできる、という ここの
+   いちばん だいじな ところは そのまま。 */
+
+/* ことばモードでは、たまの かずは ことばの ながさ いじょう ひつよう */
+const tilesOf = (p, mode) => (mode === "word" ? Math.max(p.tiles, p.wlen) : p.tiles);
+
+/* おぼえる 1こ あたりの おもさ。
+   すうじは じゅんばん（1,2,3…）が ただで わかるので いちばん かるい。
+   あいうえおは どこから はじまるかを おもいだす ぶん、
+   ことばは ことばと つづりを もっておく ぶん、おもく なる */
+const ITEM = { num: 10, kana: 12, word: 14 };
+
+/* にせものの たま（ことばモード）。じゅんばんを もたない ノイズなので ずっと やすい。
+   おなじ ねだんに すると、にせものを ふやすだけで めもりが あがってしまう */
+const DECOY = 4;
+
+/* まちがえて いい かず。1かいめが いちばん ありがたく、あとは じわじわ */
+const LIFE_MUL = [1, 0.90, 0.82, 0.76, 0.72, 0.69];
+const REV_MUL = 1.3;
+
+function difficulty(p, mode) {
+  const N = tilesOf(p, mode);               // ばんに でる たま ぜんぶ
+  const L = mode === "word" ? p.wlen : N;   // じゅんばんを おぼえる かず
+  const base = L * ITEM[mode] + (N - L) * DECOY;
+  /* みる じかんは ひきざんでは なく かけざんに する。
+     たま4この ばんで 1びょう のばすのと 14この ばんで 1びょう のばすのは
+     おなじ ねうちでは ない（きくのは「1こ あたり なんびょう あるか」）。
+     +5 は 9びょうでも 3.57 で とまる ための げた。むげんには らくに ならない */
+  const time = 50 / (5 + p.peek);
+  return Math.round(base * time / 10 * LIFE_MUL[p.lives] * (p.rev ? REV_MUL : 1));
+}
+
+/* レベル0 ＝ れんしゅう。せいげんが なく、いちばん やさしい ところから はじめる。
+   3さいの子に あわせる ための にげみち。ここを ふさぐと
+   「こどもとも あそべる」が こわれるので、かならず のこす */
+const PRACTICE = { tiles: 3, peek: 7.0, lives: 3, wlen: 2 };
+
+/* めもりの ばしょ。NEED[mode][lv]。lv 0 は 0（＝だれでも とどく）。
+   LEVELS を いじれば ここも かってに ついてくる */
+const NEED = {};
+for (const m of MODES)
+  NEED[m.id] = [0, ...LEVELS.map((L) => difficulty({ ...L, rev: false }, m.id))];
+
+/* いまの せっていが とどいている レベル */
+function levelOf(p, mode) {
+  const d = difficulty(p, mode);
+  let lv = 0;
+  for (let i = 1; i < NEED[mode].length; i++) if (d >= NEED[mode][i]) lv = i;
+  return lv;
+}
+
+/* つまみを 1つぶん きつく する。もう うごかせなければ null */
+function tighten(p, dial) {
+  if (dial === "tiles") return p.tiles < TILES.max ? { ...p, tiles: p.tiles + 1 } : null;
+  if (dial === "peek") return p.peek > PEEK.min ? { ...p, peek: r1(p.peek - PEEK.step) } : null;
+  if (dial === "lives") return p.lives > LIVES.min ? { ...p, lives: p.lives - 1 } : null;
+  return null;
+}
+
+/* つまみを うごかした けっかを かえす。
+   いま たっている めもりを われる ときは、order の じゅんに ほかの つまみを
+   きつく して おぎなう。おぎないきれなければ null（ボタンが おせなく なる）。
+
+   ゆかは「いま たっている めもり」なので、れんしゅう（0）では なにも
+   じゃまを しないし、モードを かえて めもりを われている ときでも
+   「いまより やさしく しない」だけで すむ */
+function compensate(p, mode, patch, order = []) {
+  const floor = NEED[mode][levelOf(p, mode)];
+  let np = { ...p, ...patch };
+  if (difficulty(np, mode) >= floor) return np;
+  for (const dial of order) {
+    /* つまみの はばは たかだか 30ステップ。ここは かならず おわる */
+    for (let k = 0; k < 40; k++) {
+      const t = tighten(np, dial);
+      if (!t) break;
+      np = t;
+      if (difficulty(np, mode) >= floor) return np;
+    }
+  }
+  return null;
+}
+
+/* むずかしさを メーターの いち（0〜1）に なおす。
+   めもりの あいだは まっすぐ むすぶので、レベルの せんに ぴったり あう */
+function meterPos(d, mode) {
+  const ns = NEED[mode];
+  const top = ns.length - 1;
+  for (let i = 0; i < top; i++)
+    if (d < ns[i + 1]) return (i + (d - ns[i]) / (ns[i + 1] - ns[i])) / top;
+  return 1;
+}
+
 /* ばんの たかさ。よこはばを 1 としたときの ひりつ */
 const BOARD_H = 1.2;
 
@@ -127,6 +232,12 @@ const DEFAULT_PLAYERS = [
   { av: "🦊", name: "", tiles: 8,  peek: 4.0, lives: 1, wlen: 3, rev: false },
 ];
 const emptyScores = () => DEFAULT_PLAYERS.map(() => []);
+
+/* さいこうきろくは モードごと・レベルごとに もつ。
+   むかしは モードごとだけ だったので、レベル1の 100てんと
+   レベル6の 100てんが おなじ たなに ならんでいた */
+const emptyBest = () =>
+  Object.fromEntries(MODES.map((m) => [m.id, Array(LEVELS.length + 1).fill(0)]));
 
 /* ---- なまえ ----
    にゅうりょく欄（<input>）は つかわない。ゲームの中に ひらがなの ボタンを
@@ -223,9 +334,6 @@ const save = createSave("kioku:save:v1");
 
 const C = { ...THEME, teal: "#0f9b8e", deep: "#0b7a70", board: "#effaf9" };
 
-/* ことばモードでは、たまの かずは ことばの ながさ いじょう ひつよう */
-const tilesOf = (p, mode) => (mode === "word" ? Math.max(p.tiles, p.wlen) : p.tiles);
-
 /* だれの ことか。なまえを つけていなければ かおだけ */
 const who = (p) => (p.name ? `${p.av} ${p.name}` : p.av);
 
@@ -288,7 +396,7 @@ export default function KiokuGame() {
   const [mode, setMode] = useState("num");
   const [rounds, setRounds] = useState(3);
   const [players, setPlayers] = useState(DEFAULT_PLAYERS);
-  const [best, setBest] = useState({ num: 0, word: 0, kana: 0 });
+  const [best, setBest] = useState(emptyBest);
 
   /* しんこう */
   const [phase, setPhase] = useState("home"); // home / ready / peek / play / round / final
@@ -315,9 +423,14 @@ export default function KiokuGame() {
   const pIdx = turn % count;
   const me = players[pIdx];
   const myTiles = tilesOf(me, mode);
+  const myLv = levelOf(me, mode);
   const showNext = showNextFor(myTiles);
   const roundNo = Math.floor(turn / count);
   const modeInfo = MODES.find((m) => m.id === mode);
+
+  /* ひとりモードの きろくは、いまの せっていが とどいている レベルの たなに */
+  const soloLv = levelOf(players[0], mode);
+  const soloBest = best[mode][soloLv];
 
   /* ---------- セーブの よみこみ ----------
      localStorage は ほんにんが かきかえられる。ぜんぶ うたがって けんさする */
@@ -350,11 +463,18 @@ export default function KiokuGame() {
           })
         );
       }
+      /* きろくは モードごとに レベルぶんの ならび。
+         むかしの かたち（モードごとに すうじ1つ）は はいれつでは ないので、
+         そのまま 0 に もどる。いちど きえるが、まざるよりは いい */
       if (d.best && typeof d.best === "object") {
-        setBest({
-          num: Math.floor(safeNum(d.best.num, 0, 100, 0)),
-          word: Math.floor(safeNum(d.best.word, 0, 100, 0)),
-          kana: Math.floor(safeNum(d.best.kana, 0, 100, 0)),
+        setBest(() => {
+          const n = emptyBest();
+          for (const m of MODES) {
+            const a = d.best[m.id];
+            if (!Array.isArray(a)) continue;
+            n[m.id] = n[m.id].map((_, i) => Math.floor(safeNum(a[i], 0, 100, 0)));
+          }
+          return n;
         });
       }
     }
@@ -455,7 +575,8 @@ export default function KiokuGame() {
     if (t >= rounds * count) {
       if (count === 1) {
         const avg = Math.round(scores[0].reduce((s, x) => s + x, 0) / rounds);
-        if (avg > best[mode]) setBest((b) => ({ ...b, [mode]: avg }));
+        if (avg > soloBest)
+          setBest((b) => ({ ...b, [mode]: b[mode].map((v, i) => (i === soloLv ? avg : v)) }));
       }
       setPhase("final");
       return;
@@ -490,6 +611,7 @@ export default function KiokuGame() {
         @keyframes pop { 0%{ transform:scale(.4) } 70%{ transform:scale(1.14) } 100%{ transform:scale(1) } }
         @keyframes bob { 0%,100%{ transform:translateY(0) } 50%{ transform:translateY(-5px) } }
         @keyframes wob { 0%,100%{ transform:rotate(-8deg) } 50%{ transform:rotate(8deg) } }
+        @keyframes flash { 0%,55%{ background:#ffdf9e } 100%{ background:transparent } }
         .homelink { text-decoration:none; }
         .bigbtn { border:none; cursor:pointer; font-family:inherit; font-weight:800;
                   -webkit-tap-highlight-color:transparent; }
@@ -600,7 +722,10 @@ export default function KiokuGame() {
             </div>
             <p style={{ fontSize: 13, margin: "8px 0 0", opacity: 0.75, textAlign: "center" }}>
               {modeInfo.tip}
-              {best[mode] > 0 && <>　／　ひとりの さいこう <b>{best[mode]}</b>てん</>}
+              {count === 1 && soloBest > 0 && (
+                <>　／　{soloLv === 0 ? "れんしゅう" : `レベル${soloLv}`}の さいこう{" "}
+                  <b>{soloBest}</b>てん</>
+              )}
             </p>
           </div>
 
@@ -636,13 +761,19 @@ export default function KiokuGame() {
           <div style={{ ...card, marginTop: 14, background: "#fffdf6" }}>
             <p style={{ ...label, margin: "0 0 6px" }}>おとなと こどもで しょうぶする コツ</p>
             <p style={{ fontSize: 13, lineHeight: 1.8, margin: 0, opacity: 0.85 }}>
-              てんすうは どの ハンデでも <b>100てんまん</b>です。
+              てんすうは どの レベルでも <b>100てんまん</b>です。
               すすめた ところまでが そのまま てんに なるので、
-              <b>おぼえる かず</b>を ふやす／<b>みる じかん</b>を みじかくする だけで、
-              おとなの ほうを むずかしく できます。
-              まずは レベルの ボタンで だいたい あわせて、
+              レベルが ちがっても そのまま しょうぶに なります。
+              まずは めもりを おして だいたい あわせて、
               かたよったら ➖➕ で 1つずつ ちょうせつして ください。
-              それでも おとなが つよすぎるときは <b>🔁 ぎゃく</b> も つけてみて ください。
+            </p>
+            <p style={{ fontSize: 13, lineHeight: 1.8, margin: "10px 0 0", opacity: 0.85 }}>
+              ➖➕ は <b>おなじ レベルの まま</b> つまみを とりかえる ボタンです。
+              <b>みる じかん</b>を のばすと、そのぶん <b>おぼえる かず</b>が ふえます。
+              ただで やさしくは できません。ほんとうに やさしく したいときは、
+              めもりを ひとつ ひだりに ずらして ください。
+              いちばん ひだりの <b>🌱 れんしゅう</b> だけは せいげんが ないので、
+              ちいさい子には ここから どうぞ。
             </p>
           </div>
 
@@ -668,8 +799,12 @@ export default function KiokuGame() {
           <p style={{ fontSize: 22, fontWeight: 900, margin: "8px 0 2px" }}>
             {count === 1 ? "じゅんび はいい？" : `${who(me)} の ばん！`}
           </p>
+          <p style={{ fontSize: 14, opacity: 0.8, margin: "0 0 2px" }}>
+            {modeInfo.icon} {modeInfo.name}{"　／　"}
+            <b>{myLv === 0 ? "🌱 れんしゅう" : `レベル ${myLv}`}</b>
+          </p>
           <p style={{ fontSize: 14, opacity: 0.8, margin: "0 0 4px" }}>
-            {modeInfo.icon} {modeInfo.name}　／　{myTiles}こ　／　{r1(me.peek)}びょう
+            {myTiles}こ　／　{r1(me.peek)}びょう
             {mode === "word" && `　／　${me.wlen}もじ`}
             {me.rev && "　／　🔁 ぎゃくから"}
           </p>
@@ -754,7 +889,7 @@ export default function KiokuGame() {
       {/* ===== けっか ===== */}
       {phase === "final" && (
         <Final count={count} players={players} scores={scores} totals={totals}
-          rounds={rounds} best={best[mode]}
+          rounds={rounds} best={soloBest} mode={mode}
           onAgain={() => { blip(780, 0.14); setScores(emptyScores()); setTurn(0); setPhase("ready"); }}
           onHome={backHome} />
       )}
@@ -796,7 +931,7 @@ export default function KiokuGame() {
                 blip(300, 0.14);
                 if (ask === "quit") { backHome(); return; }
                 save.clear();
-                setBest({ num: 0, word: 0, kana: 0 });
+                setBest(emptyBest());
                 setAsk(null);
               }}
               style={{ flex: 1, padding: "15px 8px", fontSize: 17, borderRadius: 16,
@@ -813,34 +948,88 @@ export default function KiokuGame() {
 /* ================= ぶひん ================= */
 
 /* ひとりぶんの したく。かお・なまえと、ハンデ。
-   ハンデは レベルで だいたい あわせて、➖➕ で こまかく なおす */
+   めもりで だいたい あわせて、➖➕ で こまかく なおす。
+   ➖➕ は「おなじ レベルの まま つまみを とりかえる」ボタンで、
+   やさしい ほうに うごかすと ほかの つまみが じどうで きつく なる */
 function PlayerSetup({ p, no, mode, blip, onFace, onName, onSet }) {
   const tiles = tilesOf(p, mode);
   const showNext = showNextFor(tiles);
-  /* いまの せっていが どの レベルと おなじか。ちがえば「じぶんで せってい」 */
-  const lv = LEVELS.findIndex(
-    (L) => L.tiles === p.tiles && L.peek === p.peek && L.lives === p.lives
-      && (mode !== "word" || L.wlen === p.wlen)
-  );
+  const lv = levelOf(p, mode);
 
-  const setTiles = (v) => {
-    blip(560 + v * 20, 0.1);
-    onSet({ tiles: clamp(v, TILES.min, TILES.max) });
+  /* おぎないが おきたとき、なにが うごいたかを ひとこと だす。
+     しばらくで きえる。ステッパーの すうじも いっしょに ひからせる */
+  const [note, setNote] = useState(null);   // { id, text, keys }
+  useEffect(() => {
+    if (!note) return;
+    const t = setTimeout(() => setNote(null), 3000);
+    return () => clearTimeout(t);
+  }, [note]);
+
+  /* つまみを うごかす。めもりを われるなら order の じゅんに おぎなう。
+     おぎないきれなければ なにも しない（ボタンは そもそも おせない） */
+  const move = (patch, order, said, freq) => {
+    const np = compensate(p, mode, patch, order);
+    if (!np) { blip(200, 0.12); return; }
+
+    /* おぎない まえの すがたと くらべて、じどうで うごいた ぶんだけを しらせる */
+    const asked = { ...p, ...patch };
+    const parts = [];
+    const keys = [];
+    if (np.tiles !== asked.tiles) {
+      parts.push(`おぼえる かずが ${np.tiles - asked.tiles}こ ふえた`);
+      keys.push("tiles");
+    }
+    if (np.peek !== asked.peek) {
+      parts.push(`みる じかんが ${r1(asked.peek - np.peek)}びょう みじかく なった`);
+      keys.push("peek");
+    }
+    if (np.lives !== asked.lives) {
+      parts.push(`まちがえて いい かずが ${asked.lives - np.lives}かい へった`);
+      keys.push("lives");
+    }
+
+    blip(freq, 0.1);
+    onSet(np);
+    setNote(parts.length ? { id: nextId(), text: `${said}ので、${parts.join("、")}よ`, keys } : null);
   };
-  const setPeek = (v) => {
-    blip(640, 0.1);
-    onSet({ peek: clamp(r1(v), PEEK.min, PEEK.max) });
-  };
-  const setLives = (v) => {
-    blip(520 + v * 40, 0.1);
-    onSet({ lives: clamp(v, LIVES.min, LIVES.max) });
-  };
-  /* ことばを ながくすると、たまが たりなくなることが ある。いっしょに ふやす */
-  const setWlen = (v) => {
+
+  /* その うごかしかたが できるか（＝おぎないきれるか）。ボタンの あけしめに つかう */
+  const can = (patch, order) => compensate(p, mode, patch, order) !== null;
+
+  const tilesPatch = (v) => ({ tiles: clamp(v, TILES.min, TILES.max) });
+  const peekPatch = (v) => ({ peek: clamp(r1(v), PEEK.min, PEEK.max) });
+  const livesPatch = (v) => ({ lives: clamp(v, LIVES.min, LIVES.max) });
+  /* ことばを ながくすると たまが たりなくなることが ある。いっしょに ふやす */
+  const wlenPatch = (v) => {
     const w = clamp(v, WLEN.min, WLEN.max);
-    blip(600 + w * 30, 0.1);
-    onSet({ wlen: w, tiles: Math.max(p.tiles, w) });
+    return w > p.tiles ? { wlen: w, tiles: w } : { wlen: w };
   };
+
+  const TILES_ORDER = ["peek", "lives"];
+  const PEEK_ORDER = ["tiles"];
+  const OTHER_ORDER = ["tiles", "peek"];
+
+  const setTiles = (v) =>
+    move(tilesPatch(v), TILES_ORDER,
+         `おぼえる かずを ${v < p.tiles ? "へらした" : "ふやした"}`, 560 + v * 20);
+  const setPeek = (v) =>
+    move(peekPatch(v), PEEK_ORDER,
+         `みる じかんを ${v > p.peek ? "のばした" : "みじかく した"}`, 640);
+  const setLives = (v) =>
+    move(livesPatch(v), OTHER_ORDER,
+         `まちがえて いい かずを ${v > p.lives ? "ふやした" : "へらした"}`, 520 + v * 40);
+  const setWlen = (v) =>
+    move(wlenPatch(v), OTHER_ORDER,
+         `ことばを ${v > p.wlen ? "ながく" : "みじかく"} した`, 600 + v * 30);
+
+  /* めもりを おす。ここだけが「やさしく する」ゆいいつの みち */
+  const jump = (i) => {
+    blip(560 + i * 40, 0.1);
+    setNote(null);
+    onSet(i === 0 ? { ...PRACTICE } : { ...LEVELS[i - 1] });
+  };
+
+  const flashOf = (key) => (note && note.keys.includes(key) ? note.id : 0);
 
   return (
     <div style={{ background: "#fff", borderRadius: 20, border: `4px solid ${C.teal}`,
@@ -863,7 +1052,10 @@ function PlayerSetup({ p, no, mode, blip, onFace, onName, onSet }) {
             {p.name || "つけてみる ✏️"}
           </span>
         </button>
-        <button className="bigbtn" onClick={() => { blip(500, 0.1); onSet({ rev: !p.rev }); }}
+        <button className="bigbtn"
+          onClick={() => move({ rev: !p.rev }, OTHER_ORDER,
+                              `ぎゃくを ${p.rev ? "やめた" : "つけた"}`, 500)}
+          disabled={p.rev && !can({ rev: false }, OTHER_ORDER)}
           style={{ padding: "11px 8px", fontSize: 12, borderRadius: 14,
                    background: p.rev ? C.coral : "#eef6f5",
                    color: p.rev ? "#fff" : C.ink,
@@ -872,46 +1064,92 @@ function PlayerSetup({ p, no, mode, blip, onFace, onName, onSet }) {
         </button>
       </div>
 
-      <div style={{ marginBottom: 6 }}>
-        <div style={{ fontSize: 15, fontWeight: 900 }}>
-          {lv >= 0 ? `レベル ${lv + 1}` : "じぶんで せってい"}
-        </div>
-        <div style={{ fontSize: 12, opacity: 0.75 }}>
-          {showNext ? "つぎに おす ものを おしえる" : "つぎは じぶんで おもいだす"}
-        </div>
-      </div>
+      <Meter p={p} mode={mode} lv={lv} onJump={jump} />
 
-      <div style={{ display: "grid", gridTemplateColumns: `repeat(${LEVELS.length},1fr)`, gap: 5 }}>
-        {LEVELS.map((L, i) => (
-          <button key={i} className="bigbtn"
-            onClick={() => { blip(560 + i * 40, 0.1); onSet({ ...L }); }}
-            aria-label={`レベル ${i + 1}`}
-            style={{ padding: "12px 0", fontSize: 16, borderRadius: 12,
-                     background: lv === i ? C.teal : "#eef6f5",
-                     color: lv === i ? "#fff" : C.ink,
-                     boxShadow: `0 4px 0 ${lv === i ? C.deep : "#d5e5e3"}` }}>
-            {i + 1}
-          </button>
-        ))}
+      <div style={{ fontSize: 12, opacity: 0.75, margin: "2px 0 0" }}>
+        {showNext ? "つぎに おす ものを おしえる" : "つぎは じぶんで おもいだす"}
       </div>
 
       <div style={{ marginTop: 4, borderTop: "2px dashed #dbeceb", paddingTop: 4 }}>
-        <Stepper name="おぼえる かず" text={`${tiles} こ`}
+        <Stepper name="おぼえる かず" text={`${tiles} こ`} flash={flashOf("tiles")}
           dec={() => setTiles(p.tiles - 1)} inc={() => setTiles(p.tiles + 1)}
-          canDec={tiles > TILES.min && (mode !== "word" || p.tiles > p.wlen)}
+          canDec={tiles > TILES.min && (mode !== "word" || p.tiles > p.wlen)
+                  && can(tilesPatch(p.tiles - 1), TILES_ORDER)}
           canInc={p.tiles < TILES.max} />
-        <Stepper name="みる じかん" text={`${r1(p.peek)} びょう`}
+        <Stepper name="みる じかん" text={`${r1(p.peek)} びょう`} flash={flashOf("peek")}
           dec={() => setPeek(p.peek - PEEK.step)} inc={() => setPeek(p.peek + PEEK.step)}
-          canDec={p.peek > PEEK.min} canInc={p.peek < PEEK.max} />
-        <Stepper name="まちがえて いい かず"
+          canDec={p.peek > PEEK.min}
+          canInc={p.peek < PEEK.max && can(peekPatch(p.peek + PEEK.step), PEEK_ORDER)} />
+        <Stepper name="まちがえて いい かず" flash={flashOf("lives")}
           text={p.lives > 0 ? `${p.lives} かい` : "なし"}
           dec={() => setLives(p.lives - 1)} inc={() => setLives(p.lives + 1)}
-          canDec={p.lives > LIVES.min} canInc={p.lives < LIVES.max} />
+          canDec={p.lives > LIVES.min}
+          canInc={p.lives < LIVES.max && can(livesPatch(p.lives + 1), OTHER_ORDER)} />
         {mode === "word" && (
           <Stepper name="ことばの ながさ" text={`${p.wlen} もじ`}
             dec={() => setWlen(p.wlen - 1)} inc={() => setWlen(p.wlen + 1)}
-            canDec={p.wlen > WLEN.min} canInc={p.wlen < WLEN.max} />
+            canDec={p.wlen > WLEN.min && can(wlenPatch(p.wlen - 1), OTHER_ORDER)}
+            canInc={p.wlen < WLEN.max} />
         )}
+      </div>
+
+      {/* おぎないの おしらせ。ステッパーの したに おいて、
+          でたり きえたり しても ➖➕ の ばしょが ずれない ように する */}
+      {note && (
+        <p style={{ fontSize: 12, fontWeight: 800, lineHeight: 1.6, color: C.deep,
+                    background: "#e8f7f5", borderRadius: 12, padding: "7px 9px",
+                    margin: "8px 0 0" }}>
+          {note.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/* むずかしさの メーター。
+   めもり（🌱＝れんしゅう と 1〜6）は そのまま おせる ボタンで、
+   おすと その レベルの せっていに とぶ。つまみを うごかすと ぬりが
+   その場で うごく。ここが「コストが 目に みえる」ところ。
+
+   ぼうの りょうはしは、いちばん はしの めもり（ボタン）の まん中に
+   そろえる。ボタン はんぶんぶん＝よこはばの 1/14 だけ うちがわに いれると、
+   ぬりの さきが めもりに ぴったり あう */
+function Meter({ p, mode, lv, onJump }) {
+  const top = NEED[mode].length - 1;
+  const pos = meterPos(difficulty(p, mode), mode);
+  const line = lv / top;
+
+  return (
+    <div style={{ marginBottom: 4 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+        <span style={{ fontSize: 13, fontWeight: 800, opacity: 0.8 }}>むずかしさ</span>
+        <b style={{ fontSize: 15, marginLeft: "auto" }}>
+          {lv === 0 ? "🌱 れんしゅう" : `レベル ${lv}`}
+        </b>
+      </div>
+
+      <div style={{ margin: "6px calc(100% / 14)", height: 14, borderRadius: 999,
+                    background: "#e6eef0", position: "relative", overflow: "hidden" }}>
+        <div style={{ position: "absolute", left: 0, top: 0, bottom: 0,
+                      width: `${line * 100}%`, background: C.teal,
+                      transition: "width .18s ease-out" }} />
+        {/* めもりより うえに でた ぶん。つぎの めもりまでの「おまけ」 */}
+        <div style={{ position: "absolute", top: 0, bottom: 0, left: `${line * 100}%`,
+                      width: `${Math.max(0, pos - line) * 100}%`, background: C.gold,
+                      transition: "width .18s ease-out, left .18s ease-out" }} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${top + 1},1fr)`, gap: 3 }}>
+        {range(top + 1).map((i) => (
+          <button key={i} className="bigbtn" onClick={() => onJump(i)}
+            aria-label={i === 0 ? "れんしゅう" : `レベル ${i}`}
+            style={{ padding: "13px 0", fontSize: 15, borderRadius: 12,
+                     background: lv === i ? C.teal : "#eef6f5",
+                     color: lv === i ? "#fff" : C.ink,
+                     boxShadow: `0 4px 0 ${lv === i ? C.deep : "#d5e5e3"}` }}>
+            {i === 0 ? "🌱" : i}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -1033,8 +1271,11 @@ function NameEditor({ now, blip, onDone, onClose }) {
   );
 }
 
-/* ➖ かず ➕ の 1ぎょう */
-function Stepper({ name, text, dec, inc, canDec, canInc }) {
+/* ➖ かず ➕ の 1ぎょう。
+   flash に あたらしい すうじが くると、まん中の かずが ひかる。
+   じどうで おぎなわれた つまみを 目で おえる ように するため。
+   key を かえて つけなおす ことで、なんども ひからせられる */
+function Stepper({ name, text, dec, inc, canDec, canInc, flash = 0 }) {
   const btn = (on) => ({
     width: 44, height: 44, borderRadius: 12, fontSize: 20, padding: 0,
     background: on ? "#eef6f5" : "#f6f8f9",
@@ -1048,7 +1289,11 @@ function Stepper({ name, text, dec, inc, canDec, canInc }) {
       </span>
       <button className="bigbtn" disabled={!canDec} onClick={dec}
         aria-label={`${name}を へらす`} style={btn(canDec)}>－</button>
-      <b style={{ fontSize: 15, minWidth: 68, textAlign: "center" }}>{text}</b>
+      <b key={flash} style={{ fontSize: 15, minWidth: 68, textAlign: "center",
+                              borderRadius: 8, padding: "3px 0",
+                              animation: flash ? "flash 1.6s ease-out" : "none" }}>
+        {text}
+      </b>
       <button className="bigbtn" disabled={!canInc} onClick={inc}
         aria-label={`${name}を ふやす`} style={btn(canInc)}>＋</button>
     </div>
@@ -1199,7 +1444,7 @@ function Board({ board, phase, step, wrongId, onTap }) {
 }
 
 /* しょうぶの けっか。1〜4にん */
-function Final({ count, players, scores, totals, rounds, best, onAgain, onHome }) {
+function Final({ count, players, scores, totals, rounds, best, mode, onAgain, onHome }) {
   const perfect = scores.map((a) => a.filter((x) => x === 100).length);
   /* いちばん てんの おおい ひと。おなじなら パーフェクトの おおいほう。
      それも おなじなら ぜんいん ひきわけ */
@@ -1254,6 +1499,14 @@ function Final({ count, players, scores, totals, rounds, best, onAgain, onHome }
                     {players[i].name}
                   </span>
                 )}
+                {/* どの おもさで とった てんかを ならべて 出す。
+                    レベルが ちがっても 100てんまんは おなじ、が 読めるように */}
+                <span style={{ fontSize: 10, fontWeight: 700, opacity: 0.7, display: "block",
+                               whiteSpace: "nowrap" }}>
+                  {levelOf(players[i], mode) === 0
+                    ? "🌱 れんしゅう"
+                    : `レベル${levelOf(players[i], mode)}`}
+                </span>
               </span>
               {range(rounds).map((r) => (
                 <span key={r} style={{ fontSize: 16, fontWeight: 900,
